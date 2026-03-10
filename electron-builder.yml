@@ -1,0 +1,21 @@
+appId: com.vibe.ide
+productName: VIBE IDE
+directories:
+  output: release/${version}
+files:
+  - dist
+  - dist-electron
+nodeGypRebuild: false
+npmRebuild: true
+mac:
+  target: dmg
+  artifactName: ${name}-${version}-mac.${ext}
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${name}-${version}-setup.${ext}
+linux:
+  target: AppImage
+  artifactName: ${name}-${version}-linux.${ext}

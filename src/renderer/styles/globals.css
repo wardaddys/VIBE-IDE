@@ -1,0 +1,100 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  /* Mesh gradient background */
+  --bg-mesh: 
+    radial-gradient(ellipse at 20% 0%, rgba(0,100,255,0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(0,170,255,0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, rgba(255,140,50,0.03) 0%, transparent 60%),
+    linear-gradient(180deg, #f8f9fc 0%, #f0f1f6 100%);
+
+  /* Glass - strong variant (title bar, chat bar) */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-blur: blur(24px);
+  --glass-border: 1px solid rgba(255, 255, 255, 0.45);
+  --glass-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 8px 32px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8);
+
+  /* Glass - panel variant (sidebar, editor, terminal, right pane) */
+  --panel-bg: rgba(255, 255, 255, 0.55);
+  --panel-blur: blur(16px);
+  --panel-border: 1px solid rgba(255, 255, 255, 0.5);
+  --panel-shadow: 0 2px 12px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.9);
+
+  /* Text */
+  --text: #1a1a2e;
+  --text-secondary: #4a4a68;
+  --text-muted: #8888a0;
+  --text-faint: #aab0c0;
+
+  /* Accent */
+  --accent: #0066ff;
+  --accent-gradient: linear-gradient(135deg, #0055ff, #0088ff, #00aaff);
+  --accent-light: rgba(0, 102, 255, 0.06);
+  --accent-medium: rgba(0, 102, 255, 0.12);
+
+  /* Semantic */
+  --green: #00a870;
+  --green-light: rgba(0, 168, 112, 0.08);
+  --warn: #e68a00;
+  --warn-light: rgba(230, 138, 0, 0.08);
+  --error: #e03050;
+
+  /* Borders */
+  --border: rgba(0, 0, 0, 0.08);
+  --border-light: rgba(0, 0, 0, 0.04);
+
+  /* Typography */
+  --font-sans: 'DM Sans', 'SF Pro Display', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Layout */
+  --gap: 6px;
+  --sidebar-width: 210px;
+  --right-pane-width: 340px;
+  --terminal-height: 140px;
+  --titlebar-height: 44px;
+  --chatbar-height: 56px;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg-mesh);
+  overflow: hidden;
+  height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbars */
+*::-webkit-scrollbar { width: 5px; height: 5px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.18); }
+
+/* Animations */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Selection */
+::selection { background: var(--accent-medium); }
+
+/* Focus */
+input:focus, textarea:focus { outline: none; border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(0,102,255,0.1) !important; }
+
+/* Draggable region for custom title bar */
+.titlebar-drag { -webkit-app-region: drag; }
+.titlebar-drag button, .titlebar-drag input, .titlebar-drag [data-clickable] { -webkit-app-region: no-drag; }
