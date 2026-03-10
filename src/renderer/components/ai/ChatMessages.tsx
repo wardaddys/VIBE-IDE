@@ -178,6 +178,7 @@ export function ChatMessages() {
 
                 return (
                     <React.Fragment key={i}>
+                        {isLastAssistant && <ThinkBlock />}
                         {(!isStreaming || msg.content !== '') && (
                             <div style={{
                                 alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -195,10 +196,10 @@ export function ChatMessages() {
                                 {renderContent(msg.content)}
                             </div>
                         )}
+                        {isStreaming && <ThinkingBlock startTime={thinkingStartTime} />}
                     </React.Fragment>
                 );
             })}
-            <ThinkBlock />
         </div>
     );
 }

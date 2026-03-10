@@ -14,12 +14,11 @@ interface OllamaState {
     agentStep: number;
     agentMaxSteps: number;
     agentStatus: string;
-    // Thinking / Reasoning state
-    thinkingContent: string;
+    // Think state
     isThinking: boolean;
+    thinkingContent: string;
     thinkingStartTime: number | null;
-    thinkingElapsed: number | null;
-    streamBuffer: string;
+    thinkingElapsed: number;
     thinkEnabled: boolean;
     thinkLevel: 'low' | 'medium' | 'high';
 
@@ -33,12 +32,12 @@ interface OllamaState {
     setIsGenerating: (isGenerating: boolean) => void;
     setAgentStatus: (status: string) => void;
     setAgentStep: (step: number, max: number) => void;
-    clearMessages: () => void;
-
-    // Thinking methods
-    appendStreamChunk: (chunk: string) => void;
-    finalizeStream: () => void;
+    
+    startThinking: () => void;
+    appendThinkContent: (content: string) => void;
+    finalizeThinking: () => void;
     resetThinking: () => void;
+    clearMessages: () => void;
     setThinkEnabled: (enabled: boolean) => void;
     setThinkLevel: (level: 'low' | 'medium' | 'high') => void;
 }
@@ -54,12 +53,10 @@ export const useOllamaStore = create<OllamaState>((set) => ({
     agentStep: 0,
     agentMaxSteps: 0,
     agentStatus: '',
-    // Initial thinking state
-    thinkingContent: '',
     isThinking: false,
+    thinkingContent: '',
     thinkingStartTime: null,
-    thinkingElapsed: null,
-    streamBuffer: '',
+    thinkingElapsed: 0,
     thinkEnabled: false,
     thinkLevel: 'medium',
 
@@ -91,71 +88,15 @@ export const useOllamaStore = create<OllamaState>((set) => ({
     setIsGenerating: (isGenerating: boolean) => set({ isGenerating }),
     setAgentStatus: (agentStatus: string) => set({ agentStatus }),
     setAgentStep: (agentStep: number, agentMaxSteps: number) => set({ agentStep, agentMaxSteps }),
-    clearMessages: () => set({ messages: [] }),
-
-    appendStreamChunk: (chunk: string) => set((state) => {
-        const newBuffer = state.streamBuffer + chunk;
-        
-        let thinkingContent = state.thinkingContent;
-        let isThinking = state.isThinking;
-        let thinkingStartTime = state.thinkingStartTime;
-        let cleanBuffer = newBuffer;
-        
-        if (!isThinking && cleanBuffer.includes('<think>')) {
-            isThinking = true;
-            thinkingStartTime = Date.now();
-        }
-        
-        const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
-        let match;
-        while ((match = thinkRegex.exec(cleanBuffer)) !== null) {
-            thinkingContent += match[1];
-            isThinking = false;
-        }
-        cleanBuffer = cleanBuffer.replace(/<think>[\s\S]*?<\/think>/g, '');
-        
-        const openThinkMatch = cleanBuffer.match(/<think>([\s\S]*)$/);
-        let mainContent = cleanBuffer;
-        if (openThinkMatch) {
-            thinkingContent = openThinkMatch[1];
-            mainContent = cleanBuffer.replace(/<think>[\s\S]*$/, '');
-        }
-        
-        const newMessages = [...state.messages];
-        if (mainContent && newMessages.length > 0 && newMessages[newMessages.length - 1].role === 'assistant') {
-            newMessages[newMessages.length - 1] = {
-                ...newMessages[newMessages.length - 1],
-                content: newMessages[newMessages.length - 1].content + mainContent
-            };
-        }
-        
-        return {
-            messages: newMessages,
-            thinkingContent,
-            isThinking,
-            thinkingStartTime,
-            streamBuffer: isThinking ? newBuffer : '',
-        };
-    }),
-
-    finalizeStream: () => set((state) => {
-        const elapsed = state.thinkingStartTime
-            ? Math.floor((Date.now() - state.thinkingStartTime) / 1000)
-            : null;
-        return {
-            streamBuffer: '',
-            isThinking: false,
-            thinkingElapsed: elapsed,
-        };
-    }),
-
-    resetThinking: () => set({ 
-        thinkingContent: '', 
-        thinkingElapsed: null, 
-        isThinking: false, 
-        streamBuffer: '',
-        thinkingStartTime: null 
-    }),
+    
+    startThinking: () => set({ isThinking: true, thinkingContent: '', thinkingStartTime: Date.now(), thinkingElapsed: 0 }),
+    appendThinkContent: (content) => set((state) => ({ thinkingContent: state.thinkingContent + content })),
+    finalizeThinking: () => set((state) => ({
+        isThinking: false,
+        thinkingElapsed: state.thinkingStartTime ? Math.round((Date.now() - state.thinkingStartTime) / 1000) : 0,
+    })),
+    resetThinking: () => set({ isThinking: false, thinkingContent: '', thinkingStartTime: null, thinkingElapsed: 0 }),
+    clearMessages: () => set({ messages: [], thinkingContent: '', isThinking: false, thinkingStartTime: null, thinkingElapsed: 0 }),
 
     setThinkEnabled: (thinkEnabled) => set({ thinkEnabled }),
     setThinkLevel: (thinkLevel) => set({ thinkLevel }),

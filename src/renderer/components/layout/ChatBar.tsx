@@ -115,8 +115,8 @@ complete file contents here — never use placeholders
 <done>Brief summary of what was accomplished</done>
 
 RULES:${projectPathEscaped ? `\nPROJECT PATH: ${projectPath}\nALWAYS start your first command by cd-ing to the project: cd "${projectPath}"` : ''}
-1. Always <read_file> before editing an existing file. Never guess file contents.
-2. Only use tools when the task requires it. NEVER run exploratory commands like dir, ls, tree, Get-ChildItem unless the user explicitly asks.
+1. Always <read_file path="..."/> before editing an existing file. Never guess file contents.
+2. CRITICAL: When the user asks you to "study", "read", "look at", or "tell me about" a specific named file, ALWAYS use <read_file path="..."/> FIRST. Never run dir, ls, Get-ChildItem, or any exploratory command to find a file the user has already named. If the user gives you a filename, use read_file on it directly without running any terminal commands first.
 3. PowerShell syntax ONLY. Use semicolons not &&. Use Remove-Item not rm. Use New-Item -ItemType Directory -Force not mkdir -p.
 4. Write COMPLETE files — never partial code, never "// rest of file here".
 5. When your task is fully complete, respond with <done>summary</done>.
