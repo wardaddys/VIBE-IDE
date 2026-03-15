@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { registerFileSystemHandlers } from './ipc/filesystem';
 import { registerTerminalHandlers } from './ipc/terminal';
 import { registerOllamaHandlers } from './ipc/ollama';
+import { registerObsidianHandlers } from './ipc/obsidian';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,6 +99,7 @@ function createWindow() {
     registerFileSystemHandlers(mainWindow);
     registerTerminalHandlers(mainWindow);
     registerOllamaHandlers(mainWindow);
+    registerObsidianHandlers();
 
     ipcMain.handle('window:minimize', () => mainWindow?.minimize());
     ipcMain.handle('window:maximize', () => {

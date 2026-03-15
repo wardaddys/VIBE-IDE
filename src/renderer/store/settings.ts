@@ -9,6 +9,7 @@ interface SettingsState {
         deepseek: string;
         groq: string;
         hf: string;
+        obsidian: string;
     };
     setApiKey: (provider: string, key: string) => void;
 }
@@ -22,7 +23,8 @@ export const useSettingsStore = create<SettingsState>()(
                 openai: '',
                 deepseek: '',
                 groq: '',
-                hf: ''
+                hf: '',
+                obsidian: ''
             },
             setApiKey: (provider, key) =>
                 set((state) => ({

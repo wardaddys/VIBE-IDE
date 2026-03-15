@@ -71,6 +71,30 @@ export interface VibeAPI {
     getLoadedModels: () => Promise<string[]>;
     log: (msg: string) => Promise<void>;
 
+    // Obsidian Integration
+    obsidianPing: (apiKey: string) => Promise<boolean>;
+    obsidianUpdateProject: (
+        apiKey: string,
+        projectName: string,
+        projectStructure: string,
+        projectPath: string
+    ) => Promise<boolean>;
+    obsidianLogRun: (
+        apiKey: string,
+        projectName: string,
+        mission: string,
+        model: string,
+        steps: string[],
+        result: string,
+        criteraMet: string
+    ) => Promise<boolean>;
+    obsidianLogDecision: (
+        apiKey: string,
+        projectName: string,
+        summary: string,
+        filesChanged: string
+    ) => Promise<boolean>;
+
     // Window
     minimizeWindow: () => Promise<void>;
     maximizeWindow: () => Promise<void>;

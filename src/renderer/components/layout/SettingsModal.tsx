@@ -2,6 +2,29 @@ import React, { useState } from 'react';
 import { GlassPanel } from '../common/GlassPanel';
 import { useSettingsStore } from '../../store/settings';
 
+function ObsidianStatusIndicator({ apiKey }: { apiKey: string }) {
+    const [status, setStatus] = React.useState<'unknown' | 'connected' | 'disconnected'>('unknown');
+
+    React.useEffect(() => {
+        if (!apiKey) { setStatus('unknown'); return; }
+        window.vibe.obsidianPing(apiKey).then(ok => {
+            setStatus(ok ? 'connected' : 'disconnected');
+        }).catch(() => setStatus('disconnected'));
+    }, [apiKey]);
+
+    if (status === 'unknown') return null;
+
+    return (
+        <div className="obsidian-status">
+            <div className={`obsidian-status__dot obsidian-status__dot--${status}`} />
+            {status === 'connected'
+                ? 'Obsidian connected — vault ready'
+                : 'Obsidian not detected — is the plugin running?'
+            }
+        </div>
+    );
+}
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
     const apiKeys = useSettingsStore(state => state.apiKeys);
     const setApiKey = useSettingsStore(state => state.setApiKey);
@@ -9,23 +32,23 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
     const handleSaveAndClose = () => {
         setSaved(true);
-        setTimeout(() => onClose(), 400); // Visual delay
+        setTimeout(() => onClose(), 400);
     };
 
     return (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }} />
-            <GlassPanel variant="strong" style={{ width: 500, maxHeight: '80vh', overflowY: 'auto', padding: 24, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 20 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-light)', paddingBottom: 12 }}>
-                    <h2 style={{ fontSize: 18, margin: 0, color: 'var(--text)' }}>IDE Settings</h2>
-                    <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 20, color: 'var(--text-muted)' }}>✕</button>
+        <div className="settings-overlay">
+            <div onClick={onClose} className="settings-backdrop" />
+            <GlassPanel variant="strong" className="settings-panel">
+                <div className="settings-header">
+                    <h2 className="settings-header__title">IDE Settings</h2>
+                    <button onClick={onClose} className="settings-header__close">✕</button>
                 </div>
-                
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    <h3 style={{ fontSize: 14, color: 'var(--text)', margin: 0, borderBottom: '1px solid var(--border-light)', paddingBottom: 8 }}>Cloud API Keys</h3>
+
+                <div className="settings-section">
+                    <h3 className="settings-section__title">Cloud API Keys</h3>
                     {['gemini', 'claude', 'openai', 'deepseek', 'groq', 'hf'].map(provider => (
-                        <div key={provider}>
-                            <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: 4, textTransform: 'capitalize' }}>
+                        <div key={provider} className="settings-field">
+                            <label className="settings-field__label">
                                 {provider === 'hf' ? 'HuggingFace' : provider} API Key
                             </label>
                             <input
@@ -33,15 +56,42 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                                 value={apiKeys[provider as keyof typeof apiKeys] || ''}
                                 onChange={(e) => setApiKey(provider, e.target.value)}
                                 placeholder={provider === 'hf' ? 'Enter HuggingFace token (hf_...)' : `Enter ${provider} key (autosaves)...`}
-                                style={{ width: '100%', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'rgba(255,255,255,0.05)', color: 'var(--text)', outline: 'none' }}
+                                className="settings-field__input"
                             />
                         </div>
                     ))}
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 10, alignItems: 'center' }}>
-                    {saved && <span style={{ color: 'var(--green)', fontSize: 13, fontWeight: 600 }}>Keys Saved! ✓</span>}
-                    <button onClick={handleSaveAndClose} style={{ padding: '8px 24px', background: 'var(--accent-gradient)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontWeight: 600 }}>Save & Close</button>
+                {/* ─── Obsidian Integration Section ─── */}
+                <div className="settings-section settings-section--obsidian">
+                    <h3 className="settings-section__title">Obsidian Integration</h3>
+
+                    <div className="settings-info-box">
+                        Install the <strong>Local REST API</strong> plugin in
+                        Obsidian, then paste your API key below. VIBE will
+                        automatically create project notes and log all agent
+                        activity to your vault.
+                    </div>
+
+                    <div className="settings-field">
+                        <label className="settings-field__label">
+                            Obsidian Local REST API Key
+                        </label>
+                        <input
+                            type="password"
+                            value={apiKeys.obsidian || ''}
+                            onChange={e => setApiKey('obsidian', e.target.value)}
+                            placeholder="Paste API key from Obsidian plugin settings..."
+                            className="settings-field__input"
+                        />
+                    </div>
+
+                    <ObsidianStatusIndicator apiKey={apiKeys.obsidian || ''} />
+                </div>
+
+                <div className="settings-footer">
+                    {saved && <span className="settings-footer__saved">Keys Saved! ✓</span>}
+                    <button onClick={handleSaveAndClose} className="settings-footer__save-btn">Save & Close</button>
                 </div>
             </GlassPanel>
         </div>

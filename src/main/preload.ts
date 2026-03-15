@@ -40,6 +40,40 @@ contextBridge.exposeInMainWorld('vibe', {
     getModelCapabilities: (modelName: string) => ipcRenderer.invoke('ollama:getCapabilities', modelName),
     getLoadedModels: () => ipcRenderer.invoke('ollama:getLoadedModels'),
 
+    // OBSIDIAN INTEGRATION
+    obsidianPing: (apiKey: string) =>
+        ipcRenderer.invoke('obsidian:ping', apiKey),
+    obsidianUpdateProject: (
+        apiKey: string,
+        projectName: string,
+        projectStructure: string,
+        projectPath: string
+    ) => ipcRenderer.invoke(
+        'obsidian:updateProjectNote',
+        apiKey, projectName, projectStructure, projectPath
+    ),
+    obsidianLogRun: (
+        apiKey: string,
+        projectName: string,
+        mission: string,
+        model: string,
+        steps: string[],
+        result: string,
+        criteraMet: string
+    ) => ipcRenderer.invoke(
+        'obsidian:logAgentRun',
+        apiKey, projectName, mission, model, steps, result, criteraMet
+    ),
+    obsidianLogDecision: (
+        apiKey: string,
+        projectName: string,
+        summary: string,
+        filesChanged: string
+    ) => ipcRenderer.invoke(
+        'obsidian:logDecision',
+        apiKey, projectName, summary, filesChanged
+    ),
+
     // WINDOW CONTROLS
     minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
     maximizeWindow: () => ipcRenderer.invoke('window:maximize'),

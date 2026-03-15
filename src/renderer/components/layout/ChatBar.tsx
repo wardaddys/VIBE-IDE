@@ -8,6 +8,7 @@ import { useUIStore, ProjectMemory } from '../../store/ui';
 import { useTerminalStore } from '../../store/terminal';
 import { streamBus } from '../../utils/streamBus';
 import { cleanTerminalOutput } from '../../utils/terminal';
+import { sanitizeForPowerShell } from '../../utils/commandSanitizer';
 import { ModelCapabilities } from '../ai/ModelCapabilities';
 import type { ChatMessage } from '../../../shared/types';
 import { getModelTags } from '../../utils/tags';
@@ -36,6 +37,7 @@ const extractTag = (text: string, tag: string): string | null => {
 const buildPlannerPrompt = (
     mission: string,
     projectPath: string | null,
+    projectStructure: string,
     memory: any,
     vibeInstructions: string | null
 ): string => `You are VIBE Planner — an expert software architect.
@@ -44,6 +46,10 @@ Your job is to create a precise, executable plan for this mission:
 "${mission}"
 
 PROJECT: ${projectPath || 'unknown'}
+PROJECT STRUCTURE (actual files that exist):
+\`\`\`
+${projectStructure}
+\`\`\`
 ${memory ? `MEMORY: ${JSON.stringify(memory).slice(0, 500)}` : ''}
 ${vibeInstructions ? `PROJECT RULES:\n${vibeInstructions}` : ''}
 
@@ -302,6 +308,41 @@ export function ChatBar() {
         return cleanTerminalOutput(rawOutput);
     };
 
+    // ─── Helper: scan project file tree ──────────────────────
+    const getProjectSnapshot = async (projPath: string): Promise<string> => {
+        try {
+            const tId = useTerminalStore.getState().activeTerminalId;
+            if (!tId) return 'Project structure unavailable';
+
+            await window.vibe.clearTerminalOutput(tId);
+            window.vibe.sendTerminalInput(
+                tId,
+                `cd "${projPath}"; ` +
+                `Get-ChildItem -Recurse -Depth 3 ` +
+                `-Exclude @('node_modules','build','dist','.git',` +
+                `'__pycache__','.vibe') ` +
+                `| Select-Object FullName | Format-Table -HideTableHeaders` +
+                `\r`
+            );
+
+            await new Promise(r => setTimeout(r, 3000));
+            const raw = await window.vibe.getTerminalOutput(tId);
+            await window.vibe.clearTerminalOutput(tId);
+
+            const lines = raw
+                .split('\n')
+                .map(l => l.trim())
+                .filter(l => l && !l.startsWith('PS '))
+                .map(l => l.replace(projPath, '').replace(/^\\/, ''))
+                .filter(l => l.length > 0)
+                .slice(0, 150);
+
+            return lines.join('\n') || 'Empty project';
+        } catch {
+            return 'Could not scan project';
+        }
+    };
+
     // ═══════════════════════════════════════════════════════════════
     // THE BULLETPROOF AGENTIC LOOP
     // Plan → Critic → Execute (per-step reflect+retry) → Verify
@@ -314,17 +355,34 @@ export function ChatBar() {
         const projectMemory = useUIStore.getState().projectMemory;
         const termId = useTerminalStore.getState().activeTerminalId;
 
+        // ─── PROJECT SCAN (once at start) ──────────────────────
+        useOllamaStore.getState().setAgentStatus('Scanning project...');
+        useOllamaStore.getState().setIsGenerating(true);
+        const projectStructure = projectPath
+            ? await getProjectSnapshot(projectPath)
+            : 'No project open';
+        window.vibe.log(`[SCAN] Found structure:\n${projectStructure.slice(0, 500)}`);
+
+        // ─── Obsidian: update project note ──────────────────────
+        const obsidianKey = useSettingsStore.getState().apiKeys.obsidian;
+        const projectName = projectPath?.split(/[/\\]/).pop() || 'Unknown';
+        if (obsidianKey && projectPath) {
+            window.vibe.obsidianUpdateProject(
+                obsidianKey, projectName, projectStructure, projectPath
+            ).catch(() => {});
+        }
+
         // ─── PHASE 1: PLANNING ─────────────────────────────────
         useOllamaStore.getState().setAgentStatus('Planning...');
         useOllamaStore.getState().setAgentStep(0, 4);
-        useOllamaStore.getState().setIsGenerating(true);
-        window.vibe.log(`[Agent] Phase: PLAN | Mission: ${userMission.slice(0, 100)}`);
+        window.vibe.log(`[AGENT START] Mission: ${userMission.slice(0, 100)}`);
+        window.vibe.log(`[PROJECT] ${projectStructure.split('\n').length} files found`);
 
         const plannerMessages: ChatMessage[] = [
             {
                 role: 'system',
                 content: buildPlannerPrompt(
-                    userMission, projectPath, projectMemory, vibeInstructions
+                    userMission, projectPath, projectStructure, projectMemory, vibeInstructions
                 )
             },
             { role: 'user', content: userMission }
@@ -526,15 +584,26 @@ export function ChatBar() {
                 if (executeMatch && termId) {
                     toolType = 'execute';
                     const command = executeMatch[1].trim();
+                    const safeCommand = sanitizeForPowerShell(command);
+
+                    if (safeCommand !== command) {
+                        window.vibe.log(
+                            `[SANITIZE] Unix→PowerShell: "${command}" → "${safeCommand}"`
+                        );
+                    }
+
                     useOllamaStore.getState().setAgentStatus(
-                        `Running: ${command.slice(0, 50)}`
+                        `Running: ${safeCommand.slice(0, 50)}`
                     );
 
                     await window.vibe.clearTerminalOutput(termId);
-                    window.vibe.sendTerminalInput(termId, command + '\r');
+                    window.vibe.sendTerminalInput(termId, safeCommand + '\r');
 
                     const cleaned = await pollTerminalOutput(termId);
                     toolResult = cleaned || 'Command ran with no output';
+
+                    window.vibe.log(`[OUTPUT] Length: ${toolResult.length} chars`);
+                    window.vibe.log(`[OUTPUT] Preview: ${toolResult.slice(0, 150)}`);
 
                     useOllamaStore.getState().addMessage({
                         role: 'user',
@@ -559,7 +628,7 @@ export function ChatBar() {
                 const critique = extractTag(stepResponse, 'critique') || '';
                 const shouldProceed = extractTag(stepResponse, 'proceed') !== 'no';
 
-                window.vibe.log(`[REFLECT] Score: ${reflectionScore} | Retry: ${retryCount}`);
+                window.vibe.log(`[REFLECT] Score: ${reflectionScore}/10 | Retry: ${retryCount}/${MAX_STEP_RETRIES}`);
 
                 previousResults.push(
                     `Step ${step.id} (${step.description.slice(0, 50)}): ` +
@@ -571,13 +640,14 @@ export function ChatBar() {
                 const hasDone = /<done>[\s\S]*?<\/done>/.test(stepResponse);
 
                 if (hasDone) {
-                    const summary = extractTag(stepResponse, 'summary') ||
+                    const doneSummary = extractTag(stepResponse, 'summary') ||
                         'Task completed';
+                    const doneFiles = extractTag(stepResponse, 'files_changed') || '';
 
                     // Save memory
                     if (projectPath) {
                         const newMemory = {
-                            lastSession: summary,
+                            lastSession: doneSummary,
                             keyFiles: [] as string[],
                             architecturalDecisions: [] as string[],
                             currentPhase: 'development',
@@ -586,6 +656,13 @@ export function ChatBar() {
                         window.vibe.writeMemory(projectPath, newMemory).then(() => {
                             useUIStore.getState().setProjectMemory(newMemory);
                         });
+                    }
+
+                    // Obsidian: log decision
+                    if (obsidianKey && projectPath) {
+                        window.vibe.obsidianLogDecision(
+                            obsidianKey, projectName, doneSummary, doneFiles
+                        ).catch(() => {});
                     }
 
                     window.vibe.log(`[Loop] Mission complete | Steps done: ${step.id}`);
@@ -655,9 +732,10 @@ export function ChatBar() {
             ?.content || '';
 
         const criteriaMet = extractTag(verifierResponse, 'criteria_met');
+        const verifyScore = extractTag(verifierResponse, 'score') || '?';
         const remaining = extractTag(verifierResponse, 'remaining');
 
-        window.vibe.log(`[VERIFY] Criteria met: ${criteriaMet}`);
+        window.vibe.log(`[VERIFY] Criteria met: ${criteriaMet} | Score: ${verifyScore}`);
 
         if (criteriaMet === 'no' && remaining) {
             useOllamaStore.getState().setAgentStatus(
@@ -672,9 +750,9 @@ export function ChatBar() {
 
         // Save final memory
         if (projectPath) {
-            const summary = previousResults.slice(-2).join(' | ');
+            const finalSummary = previousResults.slice(-2).join(' | ');
             const newMemory = {
-                lastSession: summary.slice(0, 500),
+                lastSession: finalSummary.slice(0, 500),
                 keyFiles: [] as string[],
                 architecturalDecisions: [] as string[],
                 currentPhase: 'development',
@@ -685,7 +763,21 @@ export function ChatBar() {
             });
         }
 
-        window.vibe.log(`[Loop] Iteration complete | Steps done: ${executionSteps.length}`);
+        // Obsidian: log agent run
+        const stepDescriptions = executionSteps.map(s => s.description);
+        if (obsidianKey && projectPath) {
+            window.vibe.obsidianLogRun(
+                obsidianKey,
+                projectName,
+                userMission,
+                selectedModel,
+                stepDescriptions,
+                previousResults.slice(-1)[0] || 'No result',
+                criteriaMet || 'unknown'
+            ).catch(() => {});
+        }
+
+        window.vibe.log(`[AGENT END] Mission: ${userMission.slice(0, 50)} | Steps completed: ${executionSteps.length}`);
         useOllamaStore.getState().setIsGenerating(false);
         useOllamaStore.getState().setAgentStep(0, 0);
         useOllamaStore.getState().setAgentStatus('');
