@@ -68,6 +68,7 @@ export interface VibeAPI {
         family: string;
         rawCapabilities: string[];
     } | null>;
+    getLoadedModels: () => Promise<string[]>;
     log: (msg: string) => Promise<void>;
 
     // Window

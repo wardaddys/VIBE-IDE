@@ -26,12 +26,34 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
 
     ipcMain.handle('ollama:listModels', async () => {
         try {
-            const res = await fetch(`${OLLAMA_BASE}/api/tags`);
+            // /api/tags returns ALL installed models regardless
+            // of whether they are loaded in memory or not
+            const res = await fetch(`${OLLAMA_BASE}/api/tags`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
             if (!res.ok) return [];
             const data = await res.json();
-            const models: string[] = (data.models || []).map((m: any) => m.name);
+            // data.models is array of { name, size, digest, details }
+            // Return all names sorted alphabetically
+            const models: string[] = (data.models || [])
+                .map((m: any) => m.name as string)
+                .sort((a: string, b: string) => a.localeCompare(b));
             return models;
-        } catch { return []; }
+        } catch {
+            return [];
+        }
+    });
+
+    ipcMain.handle('ollama:getLoadedModels', async () => {
+        try {
+            const res = await fetch(`${OLLAMA_BASE}/api/ps`);
+            if (!res.ok) return [];
+            const data = await res.json();
+            return (data.models || []).map((m: any) => m.name as string);
+        } catch {
+            return [];
+        }
     });
 
     ipcMain.handle('ollama:getCapabilities', async (_event, modelName: string) => {

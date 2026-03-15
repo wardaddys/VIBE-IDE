@@ -20,6 +20,20 @@ export function ModelSelector({ onClose }: Props) {
     const [showAgentManager, setShowAgentManager] = useState(false);
     const [showHFPicker, setShowHFPicker] = useState(false);
     const { pinnedModels } = useHFStore();
+    const [loadedModels, setLoadedModels] = useState<string[]>([]);
+
+    // Fetch which models are currently loaded in VRAM
+    useEffect(() => {
+        const fetchLoaded = async () => {
+            try {
+                const loaded = await window.vibe.getLoadedModels();
+                setLoadedModels(loaded);
+            } catch { }
+        };
+        fetchLoaded();
+        const interval = setInterval(fetchLoaded, 10000);
+        return () => clearInterval(interval);
+    }, []);
 
     // -----------------------------------------------------------------
     // Two buckets – local‑only models and Ollama‑cloud models.
@@ -57,6 +71,10 @@ export function ModelSelector({ onClose }: Props) {
         const id = m.id || m.name || '';
         const displayName = m.label || m.name || m.id;
         const isSelected = selectedModel === id;
+        const isLoaded = loadedModels.some(lm =>
+            lm.toLowerCase().includes(id.toLowerCase()) ||
+            id.toLowerCase().includes(lm.toLowerCase())
+        );
         return (
             <div key={id} onClick={() => { setSelectedModel(id); onClose(); }} style={{ padding: '10px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: isSelected ? 'var(--accent-light)' : 'transparent', borderBottom: '1px solid var(--border-light)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -64,6 +82,19 @@ export function ModelSelector({ onClose }: Props) {
                     <span style={{ fontSize: 13, fontWeight: isSelected ? (isSwarm ? 700 : 600) : 500, color: isSwarm ? 'var(--accent)' : 'var(--text)' }}>
                         {displayName}
                     </span>
+                    {isLoaded && (
+                        <span
+                            title="Loaded in memory"
+                            style={{
+                                width: 6, height: 6,
+                                borderRadius: '50%',
+                                background: 'var(--green)',
+                                display: 'inline-block',
+                                marginLeft: 4,
+                                boxShadow: '0 0 4px var(--green)',
+                            }}
+                        />
+                    )}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                     {!isSwarm && getModelTags(id).map(tag => (

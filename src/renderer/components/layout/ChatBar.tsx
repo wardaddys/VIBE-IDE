@@ -15,6 +15,166 @@ import { getModelTags } from '../../utils/tags';
 const estimateTokens = (msgs: ChatMessage[]) => msgs.reduce((acc, m) => acc + m.content.length / 4, 0);
 const CONTEXT_WARN_THRESHOLD = 12000;
 
+// ─── Bulletproof Loop Constants ──────────────────────────────────
+const MAX_STEP_RETRIES = 3;
+const MAX_STEPS = 12;
+const REFLECTION_THRESHOLD = 7;
+
+// ─── XML Tag Extraction Helper ───────────────────────────────────
+const extractTag = (text: string, tag: string): string | null => {
+    try {
+        const match = text.match(
+            new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i')
+        );
+        return match ? match[1].trim() : null;
+    } catch {
+        return null;
+    }
+};
+
+// ─── Prompt Builders ─────────────────────────────────────────────
+const buildPlannerPrompt = (
+    mission: string,
+    projectPath: string | null,
+    memory: any,
+    vibeInstructions: string | null
+): string => `You are VIBE Planner — an expert software architect.
+
+Your job is to create a precise, executable plan for this mission:
+"${mission}"
+
+PROJECT: ${projectPath || 'unknown'}
+${memory ? `MEMORY: ${JSON.stringify(memory).slice(0, 500)}` : ''}
+${vibeInstructions ? `PROJECT RULES:\n${vibeInstructions}` : ''}
+
+Output ONLY this XML structure, nothing else:
+
+<plan>
+  <mission>${mission}</mission>
+  <steps>
+    <step id="1" type="read_file|execute|write_file|analyze">
+      Description of exactly what to do
+    </step>
+    <step id="2" depends="1" type="execute">
+      Next step description
+    </step>
+  </steps>
+  <criteria>What "done" looks like — specific and testable</criteria>
+  <risks>Any risks or things that might go wrong</risks>
+</plan>
+
+RULES:
+- Maximum 8 steps
+- Each step must be atomic — one action only
+- type must be: read_file, execute, write_file, or analyze
+- depends attribute lists step ids this step waits for
+- Be specific — name exact files and commands where known
+- Do NOT include code yet — planning only`;
+
+const buildExecutorPrompt = (
+    mission: string,
+    plan: string,
+    currentStep: string,
+    stepId: string,
+    previousResults: string,
+    projectPath: string | null
+): string => `You are VIBE Executor — an expert developer running on Windows with PowerShell.
+
+MISSION: ${mission}
+CURRENT STEP: ${currentStep}
+PROJECT: ${projectPath || 'unknown'}
+
+FULL PLAN FOR CONTEXT:
+${plan}
+
+RESULTS SO FAR:
+${previousResults || 'No previous results yet.'}
+
+Execute ONLY the current step using exactly ONE of these tools:
+
+To read a file:
+<read_file path="relative/path/to/file.ext"/>
+
+To run a terminal command (PowerShell on Windows):
+<execute>your powershell command here</execute>
+
+To write a file (complete content only, never partial):
+<write_file path="relative/path/to/file.ext">
+complete file content here
+</write_file>
+
+To analyze/reason without a tool:
+<analyze>
+your analysis here
+</analyze>
+
+After using your tool, output your reflection:
+<reflection>
+  <score>X</score>
+  <notes>What happened, what you found, any issues</notes>
+  <proceed>yes|no</proceed>
+  <critique>If score < 8, what went wrong and how to fix it</critique>
+</reflection>
+
+RULES:
+- Use ONLY ONE tool per response
+- Always read a file before editing it
+- PowerShell syntax only — use semicolons not &&
+- Write COMPLETE files — never partial, never placeholder
+- Be honest in reflection — low score = retry with fix
+- If this is the final step and mission is complete, add:
+  <done>
+    <summary>What was accomplished</summary>
+    <files_changed>list of files</files_changed>
+    <criteria_met>yes|no</criteria_met>
+  </done>`;
+
+const buildCriticPrompt = (
+    plan: string,
+    mission: string
+): string => `You are VIBE Critic. Review this plan critically.
+
+MISSION: ${mission}
+
+PLAN TO REVIEW:
+${plan}
+
+Score the plan and output ONLY this XML:
+<critique>
+  <score>X</score>
+  <issues>List any problems, missing steps, or risks</issues>
+  <revised_plan>
+    If score < 7, output a corrected plan in the same XML 
+    format as the original. If score >= 7, write "APPROVED".
+  </revised_plan>
+</critique>
+
+Score criteria:
+9-10: Perfect, proceed immediately
+7-8: Good, minor issues noted
+5-6: Needs revision before proceeding
+< 5: Major problems, replan required`;
+
+const buildVerifierPrompt = (
+    mission: string,
+    criteria: string,
+    results: string
+): string => `You are VIBE Verifier. Check if the mission was accomplished.
+
+MISSION: ${mission}
+ACCEPTANCE CRITERIA: ${criteria}
+
+EXECUTION RESULTS:
+${results}
+
+Output ONLY this XML:
+<verification>
+  <criteria_met>yes|no|partial</criteria_met>
+  <score>X</score>
+  <evidence>What evidence shows criteria was/wasn't met</evidence>
+  <remaining>If partial/no: what still needs to be done</remaining>
+</verification>`;
+
 export function ChatBar() {
     const [input, setInput] = useState('');
     const [showModelSelector, setShowModelSelector] = useState(false);
@@ -83,56 +243,6 @@ export function ChatBar() {
         useOllamaStore.getState().addMessage({ role: 'user', content: userMsg.content });
         useOllamaStore.getState().resetThinking();
 
-        const projectMemory = useUIStore.getState().projectMemory;
-        const memorySection = projectMemory ? `
-
-PROJECT MEMORY (from last session — ${projectMemory.updatedAt}):
-Summary: ${projectMemory.lastSession}
-Current phase: ${projectMemory.currentPhase}
-Key files: ${projectMemory.keyFiles.join(', ')}
-Architectural decisions:
-${projectMemory.architecturalDecisions.map(d => `- ${d}`).join('\n')}
-
-Use this context to orient yourself. Do NOT run exploratory commands to rediscover things already known.` : '';
-
-        const projectPathEscaped = projectPath ? projectPath.replace(/\\/g, '\\\\') : null;
-        const agentSystemPrompt = `You are VIBE, an autonomous Agentic IDE assistant running on Windows with PowerShell.
-
-TOOLS — use these XML tags exactly, never wrap them in markdown code blocks:
-
-1. Read a file (ALWAYS do this before editing an existing file):
-<read_file path="relative/path/to/file.ext"/>
-
-2. Write or create a file:
-<write_file path="relative/path/to/file.ext">
-complete file contents here — never use placeholders
-</write_file>
-
-3. Run a terminal command:
-<execute>powershell command here</execute>
-
-4. Signal task complete:
-<done>Brief summary of what was accomplished</done>
-
-RULES:${projectPathEscaped ? `\nPROJECT PATH: ${projectPath}\nALWAYS start your first command by cd-ing to the project: cd "${projectPath}"` : ''}
-1. Always <read_file path="..."/> before editing an existing file. Never guess file contents.
-2. CRITICAL: When the user asks you to "study", "read", "look at", or "tell me about" a specific named file, ALWAYS use <read_file path="..."/> FIRST. Never run dir, ls, Get-ChildItem, or any exploratory command to find a file the user has already named. If the user gives you a filename, use read_file on it directly without running any terminal commands first.
-3. PowerShell syntax ONLY. Use semicolons not &&. Use Remove-Item not rm. Use New-Item -ItemType Directory -Force not mkdir -p.
-4. Write COMPLETE files — never partial code, never "// rest of file here".
-5. When your task is fully complete, respond with <done>summary</done>.
-6. If a command fails, read the error and try a different approach.
-7. NEVER use <done> before you have received and read the terminal output from your command. After every <execute>, you will receive the output — wait for it and use it in your response.
-8. After running an exploratory command (like dir or Get-ChildItem), always summarize what you found in plain text for the user BEFORE using <done>.
-9. Use 'dir' for simple directory listings. Only use Get-ChildItem if you need specific filtering.
-10. Never run the same command twice in a row.
-11. Always cd to the project directory before running any file-related commands.
-12. Never run commands from the home directory or unknown working directory.${vibeInstructions ? `\n\nPROJECT INSTRUCTIONS (from VIBE.md):\n${vibeInstructions}` : ''}${memorySection}`;
-
-        const msgsForApi: ChatMessage[] = [
-            { role: 'system', content: agentSystemPrompt },
-            ...msgsWithUser
-        ];
-
         const isSwarm = selectedModel?.startsWith('swarm-');
         if (isSwarm) {
             const swarm = swarms.find(s => s.id === selectedModel);
@@ -142,7 +252,7 @@ RULES:${projectPathEscaped ? `\nPROJECT PATH: ${projectPath}\nALWAYS start your 
             }
         }
 
-        await runAgentLoop(msgsForApi, 0);
+        await runAgentLoop(userMsg.content, msgsWithUser);
     };
 
     const waitForStreamDone = (): Promise<string> => {
@@ -152,195 +262,430 @@ RULES:${projectPathEscaped ? `\nPROJECT PATH: ${projectPath}\nALWAYS start your 
                 if (chunk.content) fullContent += chunk.content;
                 if (chunk.done) {
                     unsub();
+                    window.vibe.log('[STREAM] waitForStreamDone resolved');
                     resolve(fullContent);
                 }
             });
         });
     };
 
-    const MAX_LOOP = 6;
+    // ─── Helper: get think options for LLM call ──────────────────
+    const getThinkOptions = () => {
+        const store = useOllamaStore.getState();
+        const caps = store.modelCapabilities[store.selectedModel] ?? {};
+        if (!caps.think || !store.thinkEnabled) return null;
+        return { enabled: true, level: store.thinkLevel };
+    };
 
-    const runAgentLoop = async (messages: ChatMessage[], iteration: number) => {
-        if (iteration >= MAX_LOOP) {
-            useOllamaStore.getState().setIsGenerating(false);
-            useOllamaStore.getState().setAgentStep(0, 0);
-            useOllamaStore.getState().setAgentStatus('');
-            return;
+    // ─── Helper: poll terminal for command completion ────────────
+    const pollTerminalOutput = async (termId: string): Promise<string> => {
+        let rawOutput = '';
+        let pollAttempts = 0;
+        const MAX_POLL = 60; // 30 seconds max
+
+        while (pollAttempts < MAX_POLL) {
+            await new Promise(r => setTimeout(r, 500));
+            rawOutput = await window.vibe.getTerminalOutput(termId);
+
+            if (rawOutput.length > 3) {
+                const lines = rawOutput.split('\n').filter(l => l.trim());
+                const lastLine = lines[lines.length - 1]?.trim() || '';
+                // PowerShell prompt signals command completed
+                if (/^PS [A-Za-z]:\\/.test(lastLine)) break;
+                // Also break if we have substantial output after 3 seconds
+                if (rawOutput.length > 100 && pollAttempts >= 6) break;
+            }
+            pollAttempts++;
         }
 
-        const tokenEstimate = estimateTokens(messages);
-        if (tokenEstimate > CONTEXT_WARN_THRESHOLD) {
-            useOllamaStore.getState().setAgentStatus('⚠ Context large — consider starting a new chat for best results');
-            await new Promise(r => setTimeout(r, 2000));
-        }
+        await window.vibe.clearTerminalOutput(termId);
+        return cleanTerminalOutput(rawOutput);
+    };
 
+    // ═══════════════════════════════════════════════════════════════
+    // THE BULLETPROOF AGENTIC LOOP
+    // Plan → Critic → Execute (per-step reflect+retry) → Verify
+    // ═══════════════════════════════════════════════════════════════
+    const runAgentLoop = async (
+        userMission: string,
+        baseMessages: ChatMessage[]
+    ) => {
+        const projectPath = useUIStore.getState().projectPath;
+        const projectMemory = useUIStore.getState().projectMemory;
+        const termId = useTerminalStore.getState().activeTerminalId;
+
+        // ─── PHASE 1: PLANNING ─────────────────────────────────
+        useOllamaStore.getState().setAgentStatus('Planning...');
+        useOllamaStore.getState().setAgentStep(0, 4);
         useOllamaStore.getState().setIsGenerating(true);
-        useOllamaStore.getState().setAgentStep(iteration, MAX_LOOP);
-        useOllamaStore.getState().setAgentStatus(
-            iteration === 0 ? 'Thinking…' : `Working on step ${iteration}/${MAX_LOOP}…`
-        );
+        window.vibe.log(`[Agent] Phase: PLAN | Mission: ${userMission.slice(0, 100)}`);
+
+        const plannerMessages: ChatMessage[] = [
+            {
+                role: 'system',
+                content: buildPlannerPrompt(
+                    userMission, projectPath, projectMemory, vibeInstructions
+                )
+            },
+            { role: 'user', content: userMission }
+        ];
 
         useOllamaStore.getState().addMessage({ role: 'assistant', content: '' });
 
         try {
-            const thinkOptions = (() => {
-                const store = useOllamaStore.getState();
-                const caps = store.modelCapabilities[store.selectedModel] ?? {};
-                if (!caps.think || !store.thinkEnabled) return null;
-                return { enabled: true, level: store.thinkLevel };
-            })();
-
-            await window.vibe.chat(selectedModel, messages, apiKeys, thinkOptions);
+            await window.vibe.chat(selectedModel, plannerMessages, apiKeys, getThinkOptions());
             await waitForStreamDone();
         } catch (e) {
-            console.error('Chat error:', e);
+            window.vibe.log(`[PLAN] Failed: ${e}`);
             useOllamaStore.getState().setIsGenerating(false);
-            useOllamaStore.getState().setAgentStep(0, 0);
             useOllamaStore.getState().setAgentStatus('');
             return;
         }
 
-        const lastContent = useOllamaStore.getState().messages[useOllamaStore.getState().messages.length - 1]?.content || '';
+        const planResponse = useOllamaStore.getState()
+            .messages[useOllamaStore.getState().messages.length - 1]?.content || '';
 
-        // read_file handling
-        const readFileMatch = lastContent.match(/<read_file\s+path=['"]([^'"]+)['"]\s*\/?>/);
-        if (readFileMatch) {
-            const filePath = readFileMatch[1];
-            useOllamaStore.getState().setAgentStatus(`Reading file: ${filePath}`);
-            const projectPath = useUIStore.getState().projectPath;
-            let fileResult = '';
-            try {
-                const contents = await window.vibe.readFile(projectPath ? `${projectPath}/${filePath}` : filePath);
-                fileResult = `__FILE_CONTENTS__ ${filePath}\n${contents}`;
-            } catch {
-                fileResult = `__FILE_CONTENTS__ ${filePath}\nERROR: File not found.`;
-            }
-            useOllamaStore.getState().addMessage({ role: 'user', content: fileResult });
-            await runAgentLoop([
-                ...messages,
-                { role: 'assistant', content: lastContent },
-                { role: 'user', content: fileResult }
-            ], iteration + 1);
-            return;
+        let planXml = extractTag(planResponse, 'plan');
+        if (!planXml) {
+            // Model didn't follow structure — treat whole response as plan
+            planXml = planResponse;
         }
 
-        const hasDone = /<done>[\s\S]*?<\/done>/.test(lastContent);
-        if (hasDone) {
-            // Write updated memory after session
-            const projectPath = useUIStore.getState().projectPath;
-            if (projectPath) {
-                const doneMatch = lastContent.match(/<done>([\s\S]*?)<\/done>/);
-                const sessionSummary = doneMatch ? doneMatch[1].trim() : 'Session completed.';
-                const existingMemory = useUIStore.getState().projectMemory;
-                
-                const newMemory = {
-                    lastSession: sessionSummary,
-                    keyFiles: existingMemory?.keyFiles || [],
-                    architecturalDecisions: existingMemory?.architecturalDecisions || [],
-                    currentPhase: existingMemory?.currentPhase || 'development',
-                    updatedAt: new Date().toISOString(),
-                };
-                
-                window.vibe.writeMemory(projectPath, newMemory).then(() => {
-                    useUIStore.getState().setProjectMemory(newMemory);
+        const criteria = extractTag(planResponse, 'criteria') ||
+            'Task completed successfully';
+
+        // ─── PHASE 2: CRITIC ───────────────────────────────────
+        useOllamaStore.getState().setAgentStatus('Reviewing plan...');
+        useOllamaStore.getState().setAgentStep(1, 4);
+        window.vibe.log(`[Agent] Phase: CRITIC`);
+
+        const criticMessages: ChatMessage[] = [
+            {
+                role: 'system',
+                content: buildCriticPrompt(planXml, userMission)
+            },
+            { role: 'user', content: 'Review this plan.' }
+        ];
+
+        useOllamaStore.getState().addMessage({ role: 'assistant', content: '' });
+
+        try {
+            await window.vibe.chat(selectedModel, criticMessages, apiKeys, getThinkOptions());
+            await waitForStreamDone();
+        } catch (e) {
+            window.vibe.log(`[CRITIC] Failed (non-blocking): ${e}`);
+            // Critic failed — skip and proceed with original plan
+        }
+
+        const criticResponse = useOllamaStore.getState()
+            .messages[useOllamaStore.getState().messages.length - 1]?.content || '';
+
+        const critiqueScore = parseInt(
+            extractTag(criticResponse, 'score') || '8'
+        );
+        const revisedPlan = extractTag(criticResponse, 'revised_plan');
+
+        window.vibe.log(`[CRITIC] Score: ${critiqueScore} | Revised: ${!!revisedPlan}`);
+
+        if (critiqueScore < 7 && revisedPlan && revisedPlan !== 'APPROVED') {
+            planXml = revisedPlan;
+        }
+
+        // Extract steps from plan
+        const stepMatches = planXml.match(
+            /<step[^>]*id="(\d+)"[^>]*>([\s\S]*?)<\/step>/g
+        ) || [];
+
+        const steps = stepMatches.map(stepStr => {
+            const idMatch = stepStr.match(/id="(\d+)"/);
+            const typeMatch = stepStr.match(/type="([^"]+)"/);
+            const contentMatch = stepStr.match(/<step[^>]*>([\s\S]*?)<\/step>/);
+            return {
+                id: idMatch ? idMatch[1] : '1',
+                type: typeMatch ? typeMatch[1] : 'execute',
+                description: contentMatch ? contentMatch[1].trim() : stepStr
+            };
+        });
+
+        // If no steps parsed, create a single step from the whole plan
+        const executionSteps = steps.length > 0
+            ? steps
+            : [{ id: '1', type: 'execute', description: userMission }];
+
+        window.vibe.log(`[PLAN] Steps: ${executionSteps.length} | Criteria: ${criteria.slice(0, 100)}`);
+
+        // ─── PHASE 3: EXECUTE EACH STEP ────────────────────────
+        useOllamaStore.getState().setAgentStep(2, 4);
+
+        const previousResults: string[] = [];
+
+        // Auto-cd to project at start
+        if (projectPath && termId) {
+            await window.vibe.clearTerminalOutput(termId);
+            window.vibe.sendTerminalInput(termId, `cd "${projectPath}"\r`);
+            await new Promise(r => setTimeout(r, 800));
+            await window.vibe.clearTerminalOutput(termId);
+        }
+
+        for (const step of executionSteps.slice(0, MAX_STEPS)) {
+            useOllamaStore.getState().setAgentStatus(
+                `Step ${step.id}: ${step.description.slice(0, 50)}...`
+            );
+            window.vibe.log(`[STEP ${step.id}] Starting: ${step.description.slice(0, 80)}`);
+
+            let stepSuccess = false;
+            let retryCount = 0;
+            let lastCritique = '';
+
+            while (!stepSuccess && retryCount < MAX_STEP_RETRIES) {
+                const executorMessages: ChatMessage[] = [
+                    {
+                        role: 'system',
+                        content: buildExecutorPrompt(
+                            userMission,
+                            planXml,
+                            step.description + (lastCritique
+                                ? `\n\nPREVIOUS ATTEMPT FAILED: ${lastCritique}`
+                                : ''),
+                            step.id,
+                            previousResults.slice(-3).join('\n\n'),
+                            projectPath
+                        )
+                    },
+                    {
+                        role: 'user',
+                        content: `Execute step ${step.id}: ${step.description}`
+                    }
+                ];
+
+                useOllamaStore.getState().addMessage({
+                    role: 'assistant', content: ''
                 });
+
+                try {
+                    await window.vibe.chat(
+                        selectedModel, executorMessages, apiKeys, getThinkOptions()
+                    );
+                    await waitForStreamDone();
+                } catch (e) {
+                    window.vibe.log(`[STEP ${step.id}] LLM call failed, retrying`);
+                    retryCount++;
+                    continue;
+                }
+
+                const stepResponse = useOllamaStore.getState()
+                    .messages[useOllamaStore.getState().messages.length - 1]
+                    ?.content || '';
+
+                // ── Handle tool calls ─────────────────────────
+                let toolResult = '';
+                let toolType = 'none';
+
+                // READ FILE
+                const readMatch = stepResponse.match(
+                    /<read_file\s+path=['"]([^'"]+)['"]\s*\/?>/
+                );
+                if (readMatch) {
+                    toolType = 'read_file';
+                    const filePath = readMatch[1];
+                    useOllamaStore.getState().setAgentStatus(
+                        `Reading: ${filePath}`
+                    );
+                    try {
+                        const content = await window.vibe.readFile(
+                            projectPath ? `${projectPath}/${filePath}` : filePath
+                        );
+                        toolResult = `FILE: ${filePath}\n${content}`;
+                        useOllamaStore.getState().addMessage({
+                            role: 'user',
+                            content: `__FILE_CONTENTS__ ${filePath}\n${content}`
+                        });
+                    } catch {
+                        toolResult = `ERROR: Could not read ${filePath}`;
+                        useOllamaStore.getState().addMessage({
+                            role: 'user',
+                            content: `__FILE_CONTENTS__ ${filePath}\nERROR: File not found`
+                        });
+                    }
+                }
+
+                // WRITE FILE — handled by ChatMessages component
+                const writeMatch = stepResponse.match(
+                    /<write_file\s+path=['"]([^'"]+)['"]/
+                );
+                if (writeMatch) {
+                    toolType = 'write_file';
+                    toolResult = `WROTE: ${writeMatch[1]}`;
+                    await new Promise(r => setTimeout(r, 500));
+                }
+
+                // EXECUTE COMMAND
+                const executeMatch = stepResponse.match(
+                    /<execute>([\s\S]*?)<\/execute>/
+                );
+                if (executeMatch && termId) {
+                    toolType = 'execute';
+                    const command = executeMatch[1].trim();
+                    useOllamaStore.getState().setAgentStatus(
+                        `Running: ${command.slice(0, 50)}`
+                    );
+
+                    await window.vibe.clearTerminalOutput(termId);
+                    window.vibe.sendTerminalInput(termId, command + '\r');
+
+                    const cleaned = await pollTerminalOutput(termId);
+                    toolResult = cleaned || 'Command ran with no output';
+
+                    useOllamaStore.getState().addMessage({
+                        role: 'user',
+                        content: `__TERMINAL_OUTPUT__\n${cleaned}`
+                    });
+                }
+
+                // ANALYZE — no tool call needed
+                const analyzeMatch = extractTag(stepResponse, 'analyze');
+                if (analyzeMatch) {
+                    toolType = 'analyze';
+                    toolResult = analyzeMatch;
+                }
+
+                window.vibe.log(`[TOOL] ${toolType} | Result length: ${toolResult.length}`);
+
+                // ── Check reflection score ─────────────────────
+                const reflectionScore = parseInt(
+                    extractTag(stepResponse, 'score') || '8'
+                );
+                const reflectionNotes = extractTag(stepResponse, 'notes') || '';
+                const critique = extractTag(stepResponse, 'critique') || '';
+                const shouldProceed = extractTag(stepResponse, 'proceed') !== 'no';
+
+                window.vibe.log(`[REFLECT] Score: ${reflectionScore} | Retry: ${retryCount}`);
+
+                previousResults.push(
+                    `Step ${step.id} (${step.description.slice(0, 50)}): ` +
+                    `Score ${reflectionScore}/10. ${reflectionNotes}. ` +
+                    `Tool result: ${toolResult.slice(0, 200)}`
+                );
+
+                // Check if mission is done
+                const hasDone = /<done>[\s\S]*?<\/done>/.test(stepResponse);
+
+                if (hasDone) {
+                    const summary = extractTag(stepResponse, 'summary') ||
+                        'Task completed';
+
+                    // Save memory
+                    if (projectPath) {
+                        const newMemory = {
+                            lastSession: summary,
+                            keyFiles: [] as string[],
+                            architecturalDecisions: [] as string[],
+                            currentPhase: 'development',
+                            updatedAt: new Date().toISOString(),
+                        };
+                        window.vibe.writeMemory(projectPath, newMemory).then(() => {
+                            useUIStore.getState().setProjectMemory(newMemory);
+                        });
+                    }
+
+                    window.vibe.log(`[Loop] Mission complete | Steps done: ${step.id}`);
+                    useOllamaStore.getState().setIsGenerating(false);
+                    useOllamaStore.getState().setAgentStep(0, 0);
+                    useOllamaStore.getState().setAgentStatus('');
+                    return;
+                }
+
+                if (reflectionScore >= REFLECTION_THRESHOLD && shouldProceed) {
+                    stepSuccess = true;
+                } else {
+                    // Retry with critique
+                    lastCritique = critique ||
+                        `Score was ${reflectionScore}/10. ${reflectionNotes}`;
+                    retryCount++;
+                    useOllamaStore.getState().setAgentStatus(
+                        `Retrying step ${step.id} (attempt ${retryCount + 1})...`
+                    );
+                }
             }
 
-            useOllamaStore.getState().setIsGenerating(false);
-            useOllamaStore.getState().setAgentStep(0, 0);
-            useOllamaStore.getState().setAgentStatus('');
-            return;
-        }
-
-        const executeMatch = lastContent.match(/<execute>([\s\S]*?)<\/execute>/);
-        if (executeMatch) {
-            const command = executeMatch[1].trim();
-            const termId = useTerminalStore.getState().activeTerminalId;
-
-            if (!termId) {
-                // No terminal — tell AI
-                await runAgentLoop([
-                    ...messages,
-                    { role: 'assistant', content: lastContent },
-                    { role: 'user', content: 'ERROR: No terminal available. Cannot run commands.' }
-                ], iteration + 1);
+            if (!stepSuccess) {
+                // Step failed after all retries — tell user and stop
+                useOllamaStore.getState().addMessage({
+                    role: 'assistant',
+                    content: `⚠ Step ${step.id} failed after ${MAX_STEP_RETRIES} attempts. ` +
+                        `Last issue: ${previousResults[previousResults.length - 1]}. ` +
+                        `Please review and try a more specific instruction.`
+                });
+                window.vibe.log(`[STEP ${step.id}] FAILED after ${MAX_STEP_RETRIES} retries`);
+                useOllamaStore.getState().setIsGenerating(false);
+                useOllamaStore.getState().setAgentStep(0, 0);
+                useOllamaStore.getState().setAgentStatus('');
                 return;
             }
-
-            // Auto-cd to project on first iteration
-            if (iteration === 0) {
-                const projectPath = useUIStore.getState().projectPath;
-                if (projectPath) {
-                    await window.vibe.clearTerminalOutput(termId);
-                    window.vibe.sendTerminalInput(termId, `cd "${projectPath}"\r`);
-                    await new Promise(r => setTimeout(r, 800));
-                }
-            }
-
-            // Clear buffer before running so we only get THIS command's output
-            await window.vibe.clearTerminalOutput(termId);
-
-            // Actually send the command
-            window.vibe.sendTerminalInput(termId, command + '\r');
-
-            useOllamaStore.getState().setAgentStatus(`Running: ${command.slice(0, 40)}...`);
-
-            // Poll for output completion instead of blind wait
-            // Poll every 500ms, up to 30 seconds max
-            let rawOutput = '';
-            let attempts = 0;
-            const MAX_ATTEMPTS = 60; // 30 seconds max
-
-            while (attempts < MAX_ATTEMPTS) {
-                await new Promise(r => setTimeout(r, 500));
-                rawOutput = await window.vibe.getTerminalOutput(termId);
-
-                // A command is "done" when we see a PowerShell prompt at the end
-                // PS C:\...> signals the shell is ready again
-                const cleaned = cleanTerminalOutput(rawOutput);
-                const lines = cleaned.split('\n');
-                const lastLine = lines[lines.length - 1]?.trim() || '';
-
-                // Shell is ready when last line is empty or very short after output
-                if (rawOutput.length > 5 && attempts >= 2) {
-                    // Check if shell prompt appeared (command finished)
-                    if (/^PS [A-Za-z]:\\/.test(lastLine) || (lastLine === '' && attempts >= 4)) {
-                        break;
-                    }
-                }
-                attempts++;
-            }
-
-            await window.vibe.clearTerminalOutput(termId);
-            const finalOutput = cleanTerminalOutput(rawOutput);
-
-            if (finalOutput && finalOutput.length > 2) {
-                useOllamaStore.getState().setAgentStatus('Analyzing output...');
-                useOllamaStore.getState().addMessage({
-                    role: 'user',
-                    content: `__TERMINAL_OUTPUT__\n${finalOutput}`
-                });
-                await runAgentLoop([
-                    ...messages,
-                    { role: 'assistant', content: lastContent },
-                    {
-                        role: 'user',
-                        content: `Terminal output for command "${command}":\n\`\`\`\n${finalOutput.slice(-3000)}\n\`\`\`\nAnalyze this and continue. If the task is complete use <done>summary</done>.`
-                    }
-                ], iteration + 1);
-            } else {
-                await runAgentLoop([
-                    ...messages,
-                    { role: 'assistant', content: lastContent },
-                    {
-                        role: 'user',
-                        content: `Command "${command}" ran but produced no output. Try a different approach or use <done> if complete.`
-                    }
-                ], iteration + 1);
-            }
-            return;
         }
 
+        // ─── PHASE 4: VERIFIER ─────────────────────────────────
+        useOllamaStore.getState().setAgentStatus('Verifying results...');
+        useOllamaStore.getState().setAgentStep(3, 4);
+        window.vibe.log(`[Agent] Phase: VERIFY`);
+
+        const verifierMessages: ChatMessage[] = [
+            {
+                role: 'system',
+                content: buildVerifierPrompt(
+                    userMission,
+                    criteria,
+                    previousResults.join('\n\n')
+                )
+            },
+            { role: 'user', content: 'Verify the mission results.' }
+        ];
+
+        useOllamaStore.getState().addMessage({ role: 'assistant', content: '' });
+
+        try {
+            await window.vibe.chat(selectedModel, verifierMessages, apiKeys, getThinkOptions());
+            await waitForStreamDone();
+        } catch (e) {
+            window.vibe.log(`[VERIFY] Failed (non-blocking): ${e}`);
+        }
+
+        const verifierResponse = useOllamaStore.getState()
+            .messages[useOllamaStore.getState().messages.length - 1]
+            ?.content || '';
+
+        const criteriaMet = extractTag(verifierResponse, 'criteria_met');
+        const remaining = extractTag(verifierResponse, 'remaining');
+
+        window.vibe.log(`[VERIFY] Criteria met: ${criteriaMet}`);
+
+        if (criteriaMet === 'no' && remaining) {
+            useOllamaStore.getState().setAgentStatus(
+                'Mission incomplete — informing user...'
+            );
+            useOllamaStore.getState().addMessage({
+                role: 'assistant',
+                content: `⚠ Mission partially complete. Still needed:\n${remaining}\n\n` +
+                    `Reply to continue or adjust the approach.`
+            });
+        }
+
+        // Save final memory
+        if (projectPath) {
+            const summary = previousResults.slice(-2).join(' | ');
+            const newMemory = {
+                lastSession: summary.slice(0, 500),
+                keyFiles: [] as string[],
+                architecturalDecisions: [] as string[],
+                currentPhase: 'development',
+                updatedAt: new Date().toISOString(),
+            };
+            window.vibe.writeMemory(projectPath, newMemory).then(() => {
+                useUIStore.getState().setProjectMemory(newMemory);
+            });
+        }
+
+        window.vibe.log(`[Loop] Iteration complete | Steps done: ${executionSteps.length}`);
         useOllamaStore.getState().setIsGenerating(false);
         useOllamaStore.getState().setAgentStep(0, 0);
         useOllamaStore.getState().setAgentStatus('');

@@ -120,6 +120,7 @@ export default function App() {
                 }
                 store.setIsGenerating(false);
                 streamBus.emit({ content: '', done: true });
+                window.vibe.log('[STREAM] Stream completed and resolved');
                 const ws = useWorkspaceStore.getState();
                 if (ws.activeWorkspacePath && ws.activeThreadId) {
                     const workspace = ws.workspaces.find(w => w.path === ws.activeWorkspacePath);
