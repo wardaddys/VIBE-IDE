@@ -14,11 +14,12 @@ interface OllamaState {
     agentStep: number;
     agentMaxSteps: number;
     agentStatus: string;
-    // Think state
+    
+    // Thinking / Reasoning state
     isThinking: boolean;
     thinkingContent: string;
     thinkingStartTime: number | null;
-    thinkingElapsed: number;
+    thinkingElapsed: number | null;
     thinkEnabled: boolean;
     thinkLevel: 'low' | 'medium' | 'high';
 
@@ -32,12 +33,13 @@ interface OllamaState {
     setIsGenerating: (isGenerating: boolean) => void;
     setAgentStatus: (status: string) => void;
     setAgentStep: (step: number, max: number) => void;
-    
+    clearMessages: () => void;
+
+    // Thinking methods
     startThinking: () => void;
     appendThinkContent: (content: string) => void;
     finalizeThinking: () => void;
     resetThinking: () => void;
-    clearMessages: () => void;
     setThinkEnabled: (enabled: boolean) => void;
     setThinkLevel: (level: 'low' | 'medium' | 'high') => void;
 }
@@ -53,10 +55,12 @@ export const useOllamaStore = create<OllamaState>((set) => ({
     agentStep: 0,
     agentMaxSteps: 0,
     agentStatus: '',
+    
+    // Initial thinking state
     isThinking: false,
     thinkingContent: '',
     thinkingStartTime: null,
-    thinkingElapsed: 0,
+    thinkingElapsed: null,
     thinkEnabled: false,
     thinkLevel: 'medium',
 
@@ -79,25 +83,30 @@ export const useOllamaStore = create<OllamaState>((set) => ({
     setSelectedModel: (selectedModel: string) => set({ selectedModel }),
     addMessage: (msg: ChatMessage) => set((state) => ({ messages: [...state.messages, msg] })),
     updateLastMessage: (content: string) => set((state) => {
+        if (!content) return state;
         const newMessages = [...state.messages];
         if (newMessages.length > 0 && newMessages[newMessages.length - 1].role === 'assistant') {
-            newMessages[newMessages.length - 1].content += content;
+            newMessages[newMessages.length - 1] = {
+                ...newMessages[newMessages.length - 1],
+                content: newMessages[newMessages.length - 1].content + content
+            };
         }
         return { messages: newMessages };
     }),
     setIsGenerating: (isGenerating: boolean) => set({ isGenerating }),
     setAgentStatus: (agentStatus: string) => set({ agentStatus }),
     setAgentStep: (agentStep: number, agentMaxSteps: number) => set({ agentStep, agentMaxSteps }),
-    
-    startThinking: () => set({ isThinking: true, thinkingContent: '', thinkingStartTime: Date.now(), thinkingElapsed: 0 }),
+    clearMessages: () => set({ messages: [], thinkingContent: '', isThinking: false, thinkingElapsed: null }),
+
+    startThinking: () => set({ isThinking: true, thinkingContent: '', thinkingStartTime: Date.now(), thinkingElapsed: null }),
     appendThinkContent: (content) => set((state) => ({ thinkingContent: state.thinkingContent + content })),
     finalizeThinking: () => set((state) => ({
         isThinking: false,
-        thinkingElapsed: state.thinkingStartTime ? Math.round((Date.now() - state.thinkingStartTime) / 1000) : 0,
+        thinkingElapsed: state.thinkingStartTime ? Math.round((Date.now() - state.thinkingStartTime) / 1000) : null,
     })),
-    resetThinking: () => set({ isThinking: false, thinkingContent: '', thinkingStartTime: null, thinkingElapsed: 0 }),
-    clearMessages: () => set({ messages: [], thinkingContent: '', isThinking: false, thinkingStartTime: null, thinkingElapsed: 0 }),
+    resetThinking: () => set({ thinkingContent: '', isThinking: false, thinkingStartTime: null, thinkingElapsed: null }),
 
     setThinkEnabled: (thinkEnabled) => set({ thinkEnabled }),
     setThinkLevel: (thinkLevel) => set({ thinkLevel }),
 }));
+

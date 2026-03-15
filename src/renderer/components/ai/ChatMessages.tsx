@@ -1,46 +1,23 @@
 import React, { useEffect, useRef } from 'react';
 import { useOllamaStore } from '../../store/ollama';
-import { useTerminalStore } from '../../store/terminal';
 import { useUIStore } from '../../store/ui';
 import { useEditorStore } from '../../store/editor';
 import { ThinkBlock } from './ThinkBlock';
+import { ThinkingIndicator } from './ThinkingIndicator';
 
 function CommandBlock({ command }: { command: string }) {
-    const activeTerminalId = useTerminalStore(state => state.activeTerminalId);
-    const [status, setStatus] = React.useState<'pending' | 'running' | 'done'>('pending');
-
-    React.useEffect(() => {
-        if (activeTerminalId && status === 'pending') {
-            setStatus('running');
-            setTimeout(() => {
-                window.vibe.sendTerminalInput(activeTerminalId, command + '\r');
-                setStatus('done');
-            }, 300);
-        }
-    }, [activeTerminalId]);
-
+    const handleCopy = () => {
+        navigator.clipboard.writeText(command);
+    };
     return (
-        <div style={{
-            background: '#0d1117',
-            border: `1px solid ${status === 'done' ? '#238636' : '#30363d'}`,
-            borderRadius: 6,
-            padding: '8px 12px',
-            margin: '4px 0',
-        }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: '#7c8fa6', textTransform: 'uppercase', letterSpacing: 1 }}>Terminal</span>
-                <span style={{
-                    fontSize: 9,
-                    fontWeight: 700,
-                    padding: '1px 6px',
-                    borderRadius: 4,
-                    background: status === 'done' ? 'rgba(35,134,54,0.15)' : 'rgba(230,138,0,0.15)',
-                    color: status === 'done' ? '#3fb950' : '#e68a00',
-                }}>
-                    {status === 'done' ? 'DONE' : 'RUNNING'}
-                </span>
+        <div style={{ background: '#1e1e2e', border: '1px solid #313244', borderRadius: 8, margin: '8px 0', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>Terminal Command</span>
+                <button onClick={handleCopy} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 10 }}>Copy</button>
             </div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#e6edf3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={command}>{command}</div>
+            <div style={{ padding: '12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: '#cdd6f4', whiteSpace: 'pre-wrap' }}>
+                <span style={{ color: 'var(--accent)', marginRight: 8, opacity: 0.7 }}>$</span>{command}
+            </div>
         </div>
     );
 }
@@ -81,42 +58,14 @@ function PlanBlock({ plan }: { plan: string }) {
     );
 }
 
-function ThinkingBlock({ startTime }: { startTime: number }) {
-    const [elapsed, setElapsed] = React.useState(0);
-    const agentStatus = useOllamaStore(state => state.agentStatus);
-
-    React.useEffect(() => {
-        const interval = setInterval(() => {
-            setElapsed(Math.floor((Date.now() - startTime) / 1000));
-        }, 1000);
-        return () => clearInterval(interval);
-    }, [startTime]);
-
-    return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', color: 'var(--text-muted)', fontSize: 11 }}>
-            <div style={{
-                width: 10,
-                height: 10,
-                border: '2px solid var(--accent)',
-                borderTopColor: 'transparent',
-                borderRadius: '50%',
-                animation: 'spin 1s linear infinite',
-                flexShrink: 0,
-            }} />
-            <span style={{ fontWeight: 600, color: 'var(--accent)' }}>
-                {agentStatus || `Processing (${elapsed}s)…`}
-            </span>
-        </div>
-    );
-}
-
 export function ChatMessages() {
     const messages = useOllamaStore(state => state.messages);
     const isGenerating = useOllamaStore(state => state.isGenerating);
     const containerRef = useRef<HTMLDivElement>(null);
-    const [thinkingStartTime] = React.useState(() => Date.now());
 
-    useEffect(() => { if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight; }, [messages]);
+    useEffect(() => { 
+        if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight; 
+    }, [messages, isGenerating]);
 
     const renderContent = (content: string) => {
         if (!content) return <span style={{ opacity: 0.5 }}>…</span>;
@@ -124,7 +73,7 @@ export function ChatMessages() {
         if (content.startsWith('__TERMINAL_OUTPUT__\n')) {
             const output = content.replace('__TERMINAL_OUTPUT__\n', '');
             return (
-                <div style={{ background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, padding: '10px 14px', fontFamily: 'monospace', fontSize: 12, color: '#e6edf3', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                <div style={{ background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, color: '#e6edf3', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                     <div style={{ color: '#7c8fa6', fontSize: 10, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Terminal Output</div>
                     {output}
                 </div>
@@ -136,7 +85,7 @@ export function ChatMessages() {
             const header = content.slice('__FILE_CONTENTS__ '.length, firstNewline);
             const body = content.slice(firstNewline + 1);
             return (
-                <div style={{ background: 'rgba(0,102,255,0.04)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontFamily: 'monospace', fontSize: 12, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
+                <div style={{ background: 'rgba(0,102,255,0.04)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
                     <div style={{ color: 'var(--accent)', fontSize: 10, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>📄 Reading: {header}</div>
                     {body.slice(0, 600)}{body.length > 600 ? '\n… (truncated for display)' : ''}
                 </div>
@@ -196,7 +145,7 @@ export function ChatMessages() {
                                 {renderContent(msg.content)}
                             </div>
                         )}
-                        {isStreaming && <ThinkingBlock startTime={thinkingStartTime} />}
+                        {isStreaming && <ThinkingIndicator />}
                     </React.Fragment>
                 );
             })}
