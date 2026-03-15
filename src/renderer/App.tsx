@@ -53,6 +53,7 @@ export default function App() {
             const store = useOllamaStore.getState();
 
             if (chunk.content) {
+                streamBus.emit({ content: chunk.content, done: false });
                 thinkBufferRef.current += chunk.content;
                 let buf = thinkBufferRef.current;
                 let normalContent = '';
@@ -118,6 +119,7 @@ export default function App() {
                     inThinkBlockRef.current = false;
                 }
                 store.setIsGenerating(false);
+                streamBus.emit({ content: '', done: true });
                 const ws = useWorkspaceStore.getState();
                 if (ws.activeWorkspacePath && ws.activeThreadId) {
                     const workspace = ws.workspaces.find(w => w.path === ws.activeWorkspacePath);

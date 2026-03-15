@@ -252,61 +252,93 @@ RULES:${projectPathEscaped ? `\nPROJECT PATH: ${projectPath}\nALWAYS start your 
             return;
         }
 
-        const hasExecute = /<execute>[\s\S]*?<\/execute>/.test(lastContent);
-        if (hasExecute) {
+        const executeMatch = lastContent.match(/<execute>([\s\S]*?)<\/execute>/);
+        if (executeMatch) {
+            const command = executeMatch[1].trim();
+            const termId = useTerminalStore.getState().activeTerminalId;
+
+            if (!termId) {
+                // No terminal — tell AI
+                await runAgentLoop([
+                    ...messages,
+                    { role: 'assistant', content: lastContent },
+                    { role: 'user', content: 'ERROR: No terminal available. Cannot run commands.' }
+                ], iteration + 1);
+                return;
+            }
+
+            // Auto-cd to project on first iteration
             if (iteration === 0) {
-                // First execute — check if it includes a cd, if not, inject one
                 const projectPath = useUIStore.getState().projectPath;
-                if (projectPath && !lastContent.includes('cd ')) {
-                    const termId = useTerminalStore.getState().activeTerminalId;
-                    if (termId) {
-                        window.vibe.sendTerminalInput(termId, `cd "${projectPath}"\r`);
-                        await new Promise(r => setTimeout(r, 1000));
+                if (projectPath) {
+                    await window.vibe.clearTerminalOutput(termId);
+                    window.vibe.sendTerminalInput(termId, `cd "${projectPath}"\r`);
+                    await new Promise(r => setTimeout(r, 800));
+                }
+            }
+
+            // Clear buffer before running so we only get THIS command's output
+            await window.vibe.clearTerminalOutput(termId);
+
+            // Actually send the command
+            window.vibe.sendTerminalInput(termId, command + '\r');
+
+            useOllamaStore.getState().setAgentStatus(`Running: ${command.slice(0, 40)}...`);
+
+            // Poll for output completion instead of blind wait
+            // Poll every 500ms, up to 30 seconds max
+            let rawOutput = '';
+            let attempts = 0;
+            const MAX_ATTEMPTS = 60; // 30 seconds max
+
+            while (attempts < MAX_ATTEMPTS) {
+                await new Promise(r => setTimeout(r, 500));
+                rawOutput = await window.vibe.getTerminalOutput(termId);
+
+                // A command is "done" when we see a PowerShell prompt at the end
+                // PS C:\...> signals the shell is ready again
+                const cleaned = cleanTerminalOutput(rawOutput);
+                const lines = cleaned.split('\n');
+                const lastLine = lines[lines.length - 1]?.trim() || '';
+
+                // Shell is ready when last line is empty or very short after output
+                if (rawOutput.length > 5 && attempts >= 2) {
+                    // Check if shell prompt appeared (command finished)
+                    if (/^PS [A-Za-z]:\\/.test(lastLine) || (lastLine === '' && attempts >= 4)) {
+                        break;
                     }
                 }
+                attempts++;
             }
 
-            useOllamaStore.getState().setAgentStatus('Waiting for terminal output…');
-            await new Promise(r => setTimeout(r, 4000));
+            await window.vibe.clearTerminalOutput(termId);
+            const finalOutput = cleanTerminalOutput(rawOutput);
 
-            const termId = useTerminalStore.getState().activeTerminalId;
-            if (termId) {
-                let rawOutput = await window.vibe.getTerminalOutput(termId);
-                if (!rawOutput || rawOutput.trim().length < 5) {
-                    await new Promise(r => setTimeout(r, 3000));
-                    rawOutput = await window.vibe.getTerminalOutput(termId);
-                }
-                await window.vibe.clearTerminalOutput(termId);
-                const cleaned = cleanTerminalOutput(rawOutput);
-
-                if (cleaned && cleaned.length > 2) {
-                    useOllamaStore.getState().setAgentStatus('Analyzing output…');
-                    const terminalMsg = `__TERMINAL_OUTPUT__\n${cleaned}`;
-                    useOllamaStore.getState().addMessage({ role: 'user', content: terminalMsg });
-                    const feedbackMsg: ChatMessage = {
+            if (finalOutput && finalOutput.length > 2) {
+                useOllamaStore.getState().setAgentStatus('Analyzing output...');
+                useOllamaStore.getState().addMessage({
+                    role: 'user',
+                    content: `__TERMINAL_OUTPUT__\n${finalOutput}`
+                });
+                await runAgentLoop([
+                    ...messages,
+                    { role: 'assistant', content: lastContent },
+                    {
                         role: 'user',
-                        content: `Terminal output:\n\`\`\`\n${cleaned.slice(-2000)}\n\`\`\`\n\nAnalyze this output and respond to the user's original request. Summarize what you found in plain language. Do NOT run the same command again. If complete, write your summary then end with <done>summary</done>.`
-                    };
-                    await runAgentLoop([
-                        ...messages,
-                        { role: 'assistant', content: lastContent },
-                        feedbackMsg
-                    ], iteration + 1);
-                    return;
-                } else {
-                    useOllamaStore.getState().setAgentStatus('Command produced no output, retrying…');
-                    const emptyMsg: ChatMessage = {
+                        content: `Terminal output for command "${command}":\n\`\`\`\n${finalOutput.slice(-3000)}\n\`\`\`\nAnalyze this and continue. If the task is complete use <done>summary</done>.`
+                    }
+                ], iteration + 1);
+            } else {
+                await runAgentLoop([
+                    ...messages,
+                    { role: 'assistant', content: lastContent },
+                    {
                         role: 'user',
-                        content: `The command ran but produced no output. Try a simpler command (e.g. use 'dir' instead of 'Get-ChildItem -Recurse') or respond with what you know.`
-                    };
-                    await runAgentLoop([
-                        ...messages,
-                        { role: 'assistant', content: lastContent },
-                        emptyMsg
-                    ], iteration + 1);
-                    return;
-                }
+                        content: `Command "${command}" ran but produced no output. Try a different approach or use <done> if complete.`
+                    }
+                ], iteration + 1);
             }
+            return;
         }
 
         useOllamaStore.getState().setIsGenerating(false);

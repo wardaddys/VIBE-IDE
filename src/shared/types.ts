@@ -21,6 +21,9 @@ export interface ChatMessage {
 }
 export interface ModelCapability {
     image?: boolean;
+    vision?: boolean;
+    tools?: boolean;
+    contextLength?: number;
     web?: boolean;
     diff?: boolean;
     canExecute?: boolean;
@@ -55,6 +58,16 @@ export interface VibeAPI {
     chat: (model: string, messages: ChatMessage[], apiKeys?: Record<string, string>, thinkOptions?: any) => Promise<void>;
     onChatStream: (callback: (chunk: { content: string, done: boolean }) => void) => void;
     stopGeneration: () => Promise<void>;
+    getModelCapabilities: (modelName: string) => Promise<{
+        modelName: string;
+        think: boolean;
+        thinkBudget?: 'toggle' | 'tiered';
+        vision: boolean;
+        tools: boolean;
+        contextLength: number;
+        family: string;
+        rawCapabilities: string[];
+    } | null>;
     log: (msg: string) => Promise<void>;
 
     // Window

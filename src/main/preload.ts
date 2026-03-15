@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('vibe', {
     },
     log: (msg: string) => ipcRenderer.invoke('log:renderer', msg),
     stopGeneration: () => ipcRenderer.invoke('ollama:stop'),
+    getModelCapabilities: (modelName: string) => ipcRenderer.invoke('ollama:getCapabilities', modelName),
 
     // WINDOW CONTROLS
     minimizeWindow: () => ipcRenderer.invoke('window:minimize'),

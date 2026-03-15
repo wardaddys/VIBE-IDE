@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { ChatMessage, ModelCapability } from '../../shared/types';
-import { getCapabilities } from '../utils/capabilities';
+import { getFallbackCapabilities, fetchCapabilities } from '../utils/capabilities';
 
 interface OllamaState {
     connected: boolean;
@@ -66,10 +66,20 @@ export const useOllamaStore = create<OllamaState>((set) => ({
 
     setConnectionState: (connected: boolean, version: string | null) => set({ connected, version }),
     setModels: (models: string[]) => set((state) => {
+        // Start with fallback capabilities synchronously
         const capsMap: Record<string, ModelCapability> = {};
         models.forEach(m => {
-            capsMap[m] = getCapabilities(m);
+            capsMap[m] = getFallbackCapabilities(m);
         });
+
+        // Async fetch real capabilities and update store
+        models.forEach(async (modelName) => {
+            try {
+                const real = await fetchCapabilities(modelName);
+                useOllamaStore.getState().setModelCapability(modelName, real);
+            } catch { /* keep fallback */ }
+        });
+
         return {
             models,
             modelCapabilities: { ...state.modelCapabilities, ...capsMap },

@@ -27,12 +27,90 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
     ipcMain.handle('ollama:listModels', async () => {
         try {
             const res = await fetch(`${OLLAMA_BASE}/api/tags`);
-            if (res.ok) {
-                const data = await res.json();
-                return (data.models || []).map((m: any) => m.name);
-            }
-            return [];
+            if (!res.ok) return [];
+            const data = await res.json();
+            const models: string[] = (data.models || []).map((m: any) => m.name);
+            return models;
         } catch { return []; }
+    });
+
+    ipcMain.handle('ollama:getCapabilities', async (_event, modelName: string) => {
+        try {
+            const res = await fetch(`${OLLAMA_BASE}/api/show`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelName })
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+
+            const capabilities: string[] = data.capabilities || [];
+            const family: string = data.details?.family?.toLowerCase() || '';
+            const template: string = data.template || '';
+            const parameters: string = data.parameters || '';
+
+            // Detect think/reasoning
+            const hasThink =
+                capabilities.includes('thinking') ||
+                capabilities.includes('reasoning') ||
+                family.includes('deepseek-r1') ||
+                family.includes('qwq') ||
+                template.includes('<think>') ||
+                template.includes('[THINKING]') ||
+                modelName.toLowerCase().includes('r1') ||
+                modelName.toLowerCase().includes('qwq') ||
+                modelName.toLowerCase().includes('deepseek-r1');
+
+            // Detect think budget type
+            const thinkBudget =
+                modelName.toLowerCase().includes('claude-3-7') ||
+                modelName.toLowerCase().includes('claude-3-5')
+                    ? 'tiered'
+                    : hasThink ? 'toggle' : undefined;
+
+            // Detect vision
+            const hasVision =
+                capabilities.includes('vision') ||
+                family.includes('vision') ||
+                modelName.toLowerCase().includes('vision') ||
+                modelName.toLowerCase().includes('vl') ||
+                modelName.toLowerCase().includes('llava') ||
+                modelName.toLowerCase().includes('llama3.2-vision') ||
+                modelName.toLowerCase().includes('minicpm-v') ||
+                modelName.toLowerCase().includes('moondream') ||
+                modelName.toLowerCase().includes('llama4');
+
+            // Detect tool calling
+            const hasTools =
+                capabilities.includes('tools') ||
+                capabilities.includes('tool_use') ||
+                modelName.toLowerCase().includes('qwen3') ||
+                modelName.toLowerCase().includes('qwen2.5') ||
+                modelName.toLowerCase().includes('llama3.1') ||
+                modelName.toLowerCase().includes('llama3.2') ||
+                modelName.toLowerCase().includes('llama3.3') ||
+                modelName.toLowerCase().includes('mistral') ||
+                modelName.toLowerCase().includes('command-r') ||
+                modelName.toLowerCase().includes('granite') ||
+                modelName.toLowerCase().includes('phi4');
+
+            // Extract context length
+            const ctxMatch = parameters.match(/num_ctx\s+(\d+)/);
+            const contextLength = ctxMatch ? parseInt(ctxMatch[1]) : 4096;
+
+            return {
+                modelName,
+                think: hasThink,
+                thinkBudget,
+                vision: hasVision,
+                tools: hasTools,
+                contextLength,
+                family,
+                rawCapabilities: capabilities
+            };
+        } catch {
+            return null;
+        }
     });
 
     ipcMain.handle('ollama:chat', async (_event, model, messages, apiKeys, thinkOptions) => {
