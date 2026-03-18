@@ -25,6 +25,12 @@ export interface SwarmRepairArtifact {
         type: 'prompt_patch' | 'add_role' | 'dependency_patch' | 'model_shift';
         message: string;
     }>;
+    repairCandidates: Array<{
+        rank: number;
+        score: number;
+        rationale: string;
+        preset: Omit<SwarmConfig, 'id'>;
+    }>;
     suggestedSwarmPreset: Omit<SwarmConfig, 'id'>;
     executionContext: {
         recentResults: string[];
@@ -55,6 +61,78 @@ const detectNeedsTester = (text: string): boolean => {
 
 const detectNeedsDebugger = (text: string): boolean => {
     return /(error|exception|stack|crash|bug|retry|timeout|failed after)/i.test(text);
+};
+
+const buildCandidateAgents = (
+    mode: 'balanced' | 'verification-heavy' | 'debug-first' | 'fast-patch',
+    baseModel: string,
+): AgentNode[] => {
+    if (mode === 'verification-heavy') {
+        return [
+            makeAgent(1, 'Architect', baseModel),
+            makeAgent(2, 'Coder', baseModel, [1]),
+            makeAgent(3, 'Tester', baseModel, [2]),
+            makeAgent(4, 'Reviewer', baseModel, [3]),
+        ];
+    }
+
+    if (mode === 'debug-first') {
+        return [
+            makeAgent(1, 'Architect', baseModel),
+            makeAgent(2, 'Coder', baseModel, [1]),
+            makeAgent(3, 'Debugger', baseModel, [2]),
+            makeAgent(4, 'Reviewer', baseModel, [3]),
+        ];
+    }
+
+    if (mode === 'fast-patch') {
+        return [
+            makeAgent(1, 'Architect', baseModel),
+            makeAgent(2, 'Coder', baseModel, [1]),
+            makeAgent(3, 'Reviewer', baseModel, [2]),
+        ];
+    }
+
+    return [
+        makeAgent(1, 'Architect', baseModel),
+        makeAgent(2, 'Coder', baseModel, [1]),
+        makeAgent(3, 'Debugger', baseModel, [2]),
+        makeAgent(4, 'Tester', baseModel, [3]),
+        makeAgent(5, 'Reviewer', baseModel, [4]),
+    ];
+};
+
+const scoreCandidate = (
+    agents: AgentNode[],
+    needsTester: boolean,
+    needsDebugger: boolean,
+    status: 'failed' | 'partial',
+): number => {
+    let score = 0.6;
+    const roles = new Set(agents.map(a => a.role));
+
+    if (roles.has('Reviewer')) score += 0.06;
+    if (needsTester && roles.has('Tester')) score += 0.18;
+    if (needsDebugger && roles.has('Debugger')) score += 0.18;
+    if (status === 'partial' && roles.has('Tester')) score += 0.03;
+
+    const extraAgents = Math.max(0, agents.length - 4);
+    score -= extraAgents * 0.05;
+
+    return Math.max(0.05, Math.min(0.99, Number(score.toFixed(3))));
+};
+
+const rationaleForMode = (mode: 'balanced' | 'verification-heavy' | 'debug-first' | 'fast-patch'): string => {
+    switch (mode) {
+        case 'verification-heavy':
+            return 'Prioritizes validation confidence by introducing a dedicated Tester gate before final review.';
+        case 'debug-first':
+            return 'Prioritizes error isolation by inserting a Debugger before final review.';
+        case 'fast-patch':
+            return 'Minimizes latency with a compact pipeline focused on rapid patch and review.';
+        default:
+            return 'Balanced candidate combining debugging, testing, and final review with stronger dependency ordering.';
+    }
 };
 
 export function buildSwarmRepairArtifact(input: BuildRepairArtifactInput): SwarmRepairArtifact {
@@ -111,22 +189,32 @@ export function buildSwarmRepairArtifact(input: BuildRepairArtifactInput): Swarm
     }
 
     const baseModel = 'gemini-1.5-flash';
-    const agents: AgentNode[] = [
-        makeAgent(1, 'Architect', baseModel),
-        makeAgent(2, 'Coder', baseModel, [1]),
+    const candidateModes: Array<'balanced' | 'verification-heavy' | 'debug-first' | 'fast-patch'> = [
+        'balanced',
+        'verification-heavy',
+        'debug-first',
+        'fast-patch',
     ];
 
-    if (needsDebugger) {
-        agents.push(makeAgent(3, 'Debugger', baseModel, [2]));
-    }
+    const repairCandidates = candidateModes.map(mode => {
+        const agents = buildCandidateAgents(mode, baseModel);
+        const score = scoreCandidate(agents, needsTester || status === 'partial', needsDebugger, status);
+        return {
+            rank: 0,
+            score,
+            rationale: rationaleForMode(mode),
+            preset: {
+                name: `Repair Preset (${mode}): ${mission.slice(0, 28)}`,
+                agents,
+            },
+        };
+    }).sort((a, b) => b.score - a.score || a.preset.agents.length - b.preset.agents.length)
+      .map((candidate, idx) => ({ ...candidate, rank: idx + 1 }));
 
-    const testerDependsOn = agents[agents.length - 1]?.id ?? 2;
-    if (needsTester || status === 'partial') {
-        agents.push(makeAgent(agents.length + 1, 'Tester', baseModel, [testerDependsOn]));
-    }
-
-    const finalDependsOn = agents[agents.length - 1]?.id ?? 2;
-    agents.push(makeAgent(agents.length + 1, 'Reviewer', baseModel, [finalDependsOn]));
+    const suggestedSwarmPreset = repairCandidates[0]?.preset || {
+        name: `Repair Preset: ${mission.slice(0, 36)}`,
+        agents: buildCandidateAgents('balanced', baseModel),
+    };
 
     const confidence = Math.min(0.95, Math.max(0.55, 0.6 + (needsTester ? 0.1 : 0) + (needsDebugger ? 0.1 : 0)));
 
@@ -146,10 +234,8 @@ export function buildSwarmRepairArtifact(input: BuildRepairArtifactInput): Swarm
             confidence,
         },
         suggestedChanges,
-        suggestedSwarmPreset: {
-            name: `Repair Preset: ${mission.slice(0, 36)}`,
-            agents,
-        },
+        repairCandidates,
+        suggestedSwarmPreset,
         executionContext: {
             recentResults: previousResults.slice(-8),
             planSteps: planSteps.map(step => ({

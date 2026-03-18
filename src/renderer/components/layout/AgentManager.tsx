@@ -16,6 +16,15 @@ interface LatestRepairArtifact {
         name: string;
         agents: AgentNode[];
     };
+    repairCandidates?: Array<{
+        rank: number;
+        score: number;
+        rationale: string;
+        preset: {
+            name: string;
+            agents: AgentNode[];
+        };
+    }>;
 }
 
 export function AgentManager({ onClose }: { onClose: () => void }) {
@@ -30,6 +39,7 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
     ]);
     const [latestRepair, setLatestRepair] = useState<LatestRepairArtifact | null>(null);
     const [isLoadingRepair, setIsLoadingRepair] = useState(false);
+    const [selectedRepairCandidateIndex, setSelectedRepairCandidateIndex] = useState(0);
 
     const cloudRoster = [
         { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'gemini' },
@@ -59,6 +69,7 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
                 const raw = await window.vibe.readFile(`${projectPath}/.vibe/swarm-repairs/latest.json`);
                 const parsed = JSON.parse(raw) as LatestRepairArtifact;
                 if (active) setLatestRepair(parsed);
+                if (active) setSelectedRepairCandidateIndex(0);
             } catch {
                 if (active) setLatestRepair(null);
             } finally {
@@ -84,7 +95,8 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
     };
 
     const handleApplyRepairAsPreset = () => {
-        const preset = latestRepair?.suggestedSwarmPreset;
+        const candidates = latestRepair?.repairCandidates || [];
+        const preset = candidates[selectedRepairCandidateIndex]?.preset || latestRepair?.suggestedSwarmPreset;
         if (!preset) return;
 
         const swarmId = `swarm-${Date.now()}`;
@@ -103,11 +115,15 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
     };
 
     const handleLoadRepairIntoCanvas = () => {
-        const preset = latestRepair?.suggestedSwarmPreset;
+        const candidates = latestRepair?.repairCandidates || [];
+        const preset = candidates[selectedRepairCandidateIndex]?.preset || latestRepair?.suggestedSwarmPreset;
         if (!preset) return;
         setSwarmName(`${preset.name} (editable)`);
         setAgents(preset.agents.map((agent, idx) => ({ ...agent, id: idx + 1 })));
     };
+
+    const repairCandidates = latestRepair?.repairCandidates || [];
+    const activeCandidate = repairCandidates[selectedRepairCandidateIndex] || null;
 
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -145,6 +161,37 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
                                 {latestRepair.diagnosis?.summary && (
                                     <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
                                         {latestRepair.diagnosis.summary}
+                                    </div>
+                                )}
+                                {repairCandidates.length > 0 && (
+                                    <div style={{ marginBottom: 10 }}>
+                                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+                                            Candidate (bounded micro-search)
+                                        </div>
+                                        <select
+                                            value={selectedRepairCandidateIndex}
+                                            onChange={(e) => setSelectedRepairCandidateIndex(Number(e.target.value))}
+                                            style={{
+                                                width: '100%',
+                                                padding: '7px 8px',
+                                                borderRadius: 6,
+                                                border: '1px solid var(--border)',
+                                                background: '#fff',
+                                                color: 'var(--text)',
+                                                fontSize: 12,
+                                            }}
+                                        >
+                                            {repairCandidates.map((candidate, idx) => (
+                                                <option key={`${candidate.rank}-${idx}`} value={idx}>
+                                                    #{candidate.rank} score {candidate.score.toFixed(3)} - {candidate.preset.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {activeCandidate?.rationale && (
+                                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+                                                {activeCandidate.rationale}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

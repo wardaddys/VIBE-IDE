@@ -28,6 +28,9 @@ describe('swarm repair service', () => {
         expect(artifact.suggestedSwarmPreset.name).toContain('Repair Preset');
         expect(artifact.suggestedSwarmPreset.agents.some(a => a.role === 'Tester')).toBe(true);
         expect(artifact.suggestedChanges.some(c => c.type === 'add_role')).toBe(true);
+        expect(artifact.repairCandidates.length).toBe(4);
+        expect(artifact.repairCandidates[0].rank).toBe(1);
+        expect(artifact.repairCandidates[0].score).toBeGreaterThanOrEqual(artifact.repairCandidates[1].score);
     });
 
     it('includes debugger role when failure context indicates hard errors', () => {
@@ -54,5 +57,7 @@ describe('swarm repair service', () => {
         expect(artifact.suggestedSwarmPreset.agents.some(a => a.role === 'Debugger')).toBe(true);
         expect(artifact.diagnosis.confidence).toBeGreaterThanOrEqual(0.55);
         expect(artifact.executionContext.planSteps).toHaveLength(1);
+        expect(artifact.repairCandidates.every(c => c.rank >= 1)).toBe(true);
+        expect(artifact.repairCandidates.some(c => c.preset.agents.some(a => a.role === 'Debugger'))).toBe(true);
     });
 });
