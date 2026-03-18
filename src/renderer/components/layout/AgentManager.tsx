@@ -4,6 +4,7 @@ import { useOllamaStore } from '../../store/ollama';
 import { useSettingsStore } from '../../store/settings';
 import { useSwarmStore, AgentNode } from '../../store/swarms';
 import { useUIStore } from '../../store/ui';
+import { useHFStore } from '../../store/huggingface';
 
 interface LatestRepairArtifact {
     id: string;
@@ -29,31 +30,78 @@ interface LatestRepairArtifact {
 
 export function AgentManager({ onClose }: { onClose: () => void }) {
     const localModels = useOllamaStore(state => state.models);
+    const selectedModel = useOllamaStore(state => state.selectedModel);
     const apiKeys = useSettingsStore(state => state.apiKeys);
     const addSwarm = useSwarmStore(state => state.addSwarm);
     const projectPath = useUIStore(state => state.projectPath);
+    const pinnedHFModels = useHFStore(state => state.pinnedModels);
     
     const [swarmName, setSwarmName] = useState('My Custom Swarm');
     const [agents, setAgents] = useState<AgentNode[]>([
-        { id: 1, role: 'Architect', model: 'gemini-1.5-flash' }
+        { id: 1, role: 'Architect', model: selectedModel || localModels[0] || 'model:auto' }
     ]);
     const [latestRepair, setLatestRepair] = useState<LatestRepairArtifact | null>(null);
     const [isLoadingRepair, setIsLoadingRepair] = useState(false);
     const [selectedRepairCandidateIndex, setSelectedRepairCandidateIndex] = useState(0);
+    const [openRouterModels, setOpenRouterModels] = useState<Array<{ id: string; label: string }>>([]);
 
-    const cloudRoster = [
-        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'gemini' },
-        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', provider: 'gemini' },
-        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'gemini' },
-        { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet', provider: 'claude' },
-        { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
-        { id: 'deepseek-chat', name: 'DeepSeek V3', provider: 'deepseek' },
-        { id: 'deepseek-coder', name: 'DeepSeek Coder', provider: 'deepseek' },
-        { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B (Groq)', provider: 'groq' },
-        { id: 'openrouter:openai/gpt-4o-mini', name: 'OpenRouter GPT-4o Mini', provider: 'openrouter' },
-        { id: 'openrouter:anthropic/claude-3.5-sonnet', name: 'OpenRouter Claude 3.5 Sonnet', provider: 'openrouter' }
-    ];
-    const availableCloudModels = cloudRoster.filter(m => !!apiKeys[m.provider as keyof typeof apiKeys]);
+    const dynamicModelOptions = React.useMemo(() => {
+        const options: Array<{ id: string; label: string; group: 'local' | 'openrouter' | 'hf' | 'other' }> = [];
+        const seen = new Set<string>();
+
+        const push = (id: string, label: string, group: 'local' | 'openrouter' | 'hf' | 'other') => {
+            const normalized = String(id || '').trim();
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            options.push({ id: normalized, label: label || normalized, group });
+        };
+
+        localModels.forEach((model) => push(model, model, 'local'));
+        openRouterModels.forEach((model) => push(model.id, model.label || model.id, 'openrouter'));
+        pinnedHFModels.forEach((model) => push(`hf:${model.id}`, `HF ${model.name}`, 'hf'));
+
+        if (selectedModel) push(selectedModel, selectedModel, 'other');
+        agents.forEach((agent) => push(agent.model, agent.model, 'other'));
+        latestRepair?.repairCandidates?.forEach((candidate) => {
+            candidate.preset.agents.forEach((agent) => push(agent.model, agent.model, 'other'));
+        });
+        latestRepair?.suggestedSwarmPreset?.agents?.forEach((agent) => push(agent.model, agent.model, 'other'));
+
+        return options;
+    }, [localModels, openRouterModels, pinnedHFModels, selectedModel, agents, latestRepair]);
+
+    const modelGroups = React.useMemo(() => {
+        const local = dynamicModelOptions.filter((m) => m.group === 'local');
+        const openrouter = dynamicModelOptions.filter((m) => m.group === 'openrouter');
+        const hf = dynamicModelOptions.filter((m) => m.group === 'hf');
+        const other = dynamicModelOptions.filter((m) => m.group === 'other');
+        return { local, openrouter, hf, other };
+    }, [dynamicModelOptions]);
+
+    React.useEffect(() => {
+        let active = true;
+
+        const loadOpenRouterModels = async () => {
+            if (!apiKeys.openrouter) {
+                if (active) setOpenRouterModels([]);
+                return;
+            }
+
+            try {
+                const rows = await window.vibe.listOpenRouterModels(apiKeys);
+                if (active) {
+                    setOpenRouterModels((rows || []).map((row) => ({ id: row.id, label: row.label || row.id })));
+                }
+            } catch {
+                if (active) setOpenRouterModels([]);
+            }
+        };
+
+        loadOpenRouterModels();
+        return () => {
+            active = false;
+        };
+    }, [apiKeys]);
 
     React.useEffect(() => {
         let active = true;
@@ -84,7 +132,8 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
     }, [projectPath]);
 
     const addAgent = () => {
-        setAgents([...agents, { id: Date.now(), role: 'Coder', model: localModels.length > 0 ? localModels[0] : 'gemini-1.5-flash' }]);
+        const fallback = dynamicModelOptions[0]?.id || selectedModel || 'model:auto';
+        setAgents([...agents, { id: Date.now(), role: 'Coder', model: fallback }]);
     };
 
     const handleSave = () => {
@@ -244,8 +293,26 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
                                 </select>
 
                                 <select value={agent.model} onChange={(e) => setAgents(agents.map(a => a.id === agent.id ? { ...a, model: e.target.value } : a))} style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                                    <optgroup label="Local Models">{localModels.map(m => <option key={m} value={m}>{m}</option>)}</optgroup>
-                                    {availableCloudModels.length > 0 && <optgroup label="Cloud API Models">{availableCloudModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</optgroup>}
+                                    {modelGroups.local.length > 0 && (
+                                        <optgroup label="Local Models">
+                                            {modelGroups.local.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                                        </optgroup>
+                                    )}
+                                    {modelGroups.openrouter.length > 0 && (
+                                        <optgroup label="OpenRouter Models">
+                                            {modelGroups.openrouter.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                                        </optgroup>
+                                    )}
+                                    {modelGroups.hf.length > 0 && (
+                                        <optgroup label="HuggingFace Models">
+                                            {modelGroups.hf.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                                        </optgroup>
+                                    )}
+                                    {modelGroups.other.length > 0 && (
+                                        <optgroup label="Other Available Models">
+                                            {modelGroups.other.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                                        </optgroup>
+                                    )}
                                 </select>
                             </div>
                             {index < agents.length - 1 && <div style={{ color: 'var(--accent)', fontSize: 24 }}>→</div>}

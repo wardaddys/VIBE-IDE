@@ -46,6 +46,8 @@ interface BuildRepairArtifactInput {
     verification: RepairVerificationSnapshot;
     previousResults: string[];
     planSteps: PlanStep[];
+    preferredModel?: string;
+    modelPool?: string[];
 }
 
 const makeAgent = (id: number, role: string, model: string, dependsOn?: number[]): AgentNode => ({
@@ -65,40 +67,40 @@ const detectNeedsDebugger = (text: string): boolean => {
 
 const buildCandidateAgents = (
     mode: 'balanced' | 'verification-heavy' | 'debug-first' | 'fast-patch',
-    baseModel: string,
+    modelAt: (idx: number) => string,
 ): AgentNode[] => {
     if (mode === 'verification-heavy') {
         return [
-            makeAgent(1, 'Architect', baseModel),
-            makeAgent(2, 'Coder', baseModel, [1]),
-            makeAgent(3, 'Tester', baseModel, [2]),
-            makeAgent(4, 'Reviewer', baseModel, [3]),
+            makeAgent(1, 'Architect', modelAt(0)),
+            makeAgent(2, 'Coder', modelAt(1), [1]),
+            makeAgent(3, 'Tester', modelAt(2), [2]),
+            makeAgent(4, 'Reviewer', modelAt(3), [3]),
         ];
     }
 
     if (mode === 'debug-first') {
         return [
-            makeAgent(1, 'Architect', baseModel),
-            makeAgent(2, 'Coder', baseModel, [1]),
-            makeAgent(3, 'Debugger', baseModel, [2]),
-            makeAgent(4, 'Reviewer', baseModel, [3]),
+            makeAgent(1, 'Architect', modelAt(0)),
+            makeAgent(2, 'Coder', modelAt(1), [1]),
+            makeAgent(3, 'Debugger', modelAt(2), [2]),
+            makeAgent(4, 'Reviewer', modelAt(3), [3]),
         ];
     }
 
     if (mode === 'fast-patch') {
         return [
-            makeAgent(1, 'Architect', baseModel),
-            makeAgent(2, 'Coder', baseModel, [1]),
-            makeAgent(3, 'Reviewer', baseModel, [2]),
+            makeAgent(1, 'Architect', modelAt(0)),
+            makeAgent(2, 'Coder', modelAt(1), [1]),
+            makeAgent(3, 'Reviewer', modelAt(2), [2]),
         ];
     }
 
     return [
-        makeAgent(1, 'Architect', baseModel),
-        makeAgent(2, 'Coder', baseModel, [1]),
-        makeAgent(3, 'Debugger', baseModel, [2]),
-        makeAgent(4, 'Tester', baseModel, [3]),
-        makeAgent(5, 'Reviewer', baseModel, [4]),
+        makeAgent(1, 'Architect', modelAt(0)),
+        makeAgent(2, 'Coder', modelAt(1), [1]),
+        makeAgent(3, 'Debugger', modelAt(2), [2]),
+        makeAgent(4, 'Tester', modelAt(3), [3]),
+        makeAgent(5, 'Reviewer', modelAt(4), [4]),
     ];
 };
 
@@ -144,6 +146,8 @@ export function buildSwarmRepairArtifact(input: BuildRepairArtifactInput): Swarm
         verification,
         previousResults,
         planSteps,
+        preferredModel,
+        modelPool,
     } = input;
 
     const combinedFailureText = [
@@ -188,7 +192,13 @@ export function buildSwarmRepairArtifact(input: BuildRepairArtifactInput): Swarm
         });
     }
 
-    const baseModel = 'gemini-1.5-flash';
+    const normalizedPool = Array.from(new Set([
+        preferredModel || '',
+        ...(modelPool || []),
+    ].map(m => String(m || '').trim()).filter(Boolean)));
+    const fallbackModel = preferredModel?.trim() || normalizedPool[0] || 'model:auto';
+    const resolvedModelPool = normalizedPool.length > 0 ? normalizedPool : [fallbackModel];
+
     const candidateModes: Array<'balanced' | 'verification-heavy' | 'debug-first' | 'fast-patch'> = [
         'balanced',
         'verification-heavy',
@@ -196,8 +206,9 @@ export function buildSwarmRepairArtifact(input: BuildRepairArtifactInput): Swarm
         'fast-patch',
     ];
 
-    const repairCandidates = candidateModes.map(mode => {
-        const agents = buildCandidateAgents(mode, baseModel);
+    const repairCandidates = candidateModes.map((mode, modeIdx) => {
+        const modelAt = (idx: number) => resolvedModelPool[(modeIdx + idx) % resolvedModelPool.length] || fallbackModel;
+        const agents = buildCandidateAgents(mode, modelAt);
         const score = scoreCandidate(agents, needsTester || status === 'partial', needsDebugger, status);
         return {
             rank: 0,
@@ -213,7 +224,7 @@ export function buildSwarmRepairArtifact(input: BuildRepairArtifactInput): Swarm
 
     const suggestedSwarmPreset = repairCandidates[0]?.preset || {
         name: `Repair Preset: ${mission.slice(0, 36)}`,
-        agents: buildCandidateAgents('balanced', baseModel),
+        agents: buildCandidateAgents('balanced', () => fallbackModel),
     };
 
     const confidence = Math.min(0.95, Math.max(0.55, 0.6 + (needsTester ? 0.1 : 0) + (needsDebugger ? 0.1 : 0)));

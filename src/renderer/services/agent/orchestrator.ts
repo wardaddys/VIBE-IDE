@@ -209,6 +209,8 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                 },
                 previousResults,
                 planSteps: executionSteps,
+                preferredModel: selectedModel,
+                modelPool: useOllamaStore.getState().models,
             });
             await persistSwarmRepairArtifact(projectPath, artifact);
             window.vibe.log(`[REPAIR] Generated ${artifact.id}`);
