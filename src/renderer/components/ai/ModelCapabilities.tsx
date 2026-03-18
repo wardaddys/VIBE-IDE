@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useOllamaStore } from '../../store/ollama';
 import type { ModelCapability } from '../../../shared/types';
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { GlassPanel } from '../common/GlassPanel';
 import { useOllamaStore } from '../../store/ollama';
 import { useSettingsStore } from '../../store/settings';
@@ -21,6 +21,22 @@ export function ModelSelector({ onClose }: Props) {
     const [showHFPicker, setShowHFPicker] = useState(false);
     const { pinnedModels } = useHFStore();
     const [loadedModels, setLoadedModels] = useState<string[]>([]);
+    const [openRouterModels, setOpenRouterModels] = useState<Array<{
+        id: string;
+        label: string;
+        contextWindow: number | null;
+        inputPer1M: number | null;
+        outputPer1M: number | null;
+        supportsTools: boolean;
+        supportsVision: boolean;
+    }>>([]);
+    const [openRouterSort, setOpenRouterSort] = useState<'recommended' | 'cheapest-in' | 'cheapest-out' | 'largest-context'>('recommended');
+    const [openRouterQuery, setOpenRouterQuery] = useState('');
+    const [toolsOnly, setToolsOnly] = useState(false);
+    const [visionOnly, setVisionOnly] = useState(false);
+    const [cloudQuery, setCloudQuery] = useState('');
+    const [cloudSort, setCloudSort] = useState<'a-z' | 'z-a' | 'provider'>('a-z');
+    const [cloudProvider, setCloudProvider] = useState<'all' | 'gemini' | 'claude' | 'openai' | 'deepseek' | 'groq'>('all');
 
     // Fetch which models are currently loaded in VRAM
     useEffect(() => {
@@ -54,6 +70,18 @@ export function ModelSelector({ onClose }: Props) {
         return () => clearInterval(interval);
     }, []);
 
+    useEffect(() => {
+        const loadOpenRouter = async () => {
+            try {
+                const rows = await window.vibe.listOpenRouterModels(apiKeys);
+                setOpenRouterModels(rows || []);
+            } catch {
+                setOpenRouterModels([]);
+            }
+        };
+        loadOpenRouter();
+    }, [apiKeys.openrouter]);
+
     const cloudRoster = [
         { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'gemini' },
         { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', provider: 'gemini' },
@@ -66,6 +94,33 @@ export function ModelSelector({ onClose }: Props) {
     ];
 
     const availableCloudModels = cloudRoster.filter(m => !!apiKeys[m.provider as keyof typeof apiKeys]);
+
+    const filteredCloudModels = useMemo(() => {
+        let rows = [...availableCloudModels];
+
+        const q = cloudQuery.trim().toLowerCase();
+        if (q) {
+            rows = rows.filter(r =>
+                r.name.toLowerCase().includes(q) ||
+                r.id.toLowerCase().includes(q) ||
+                r.provider.toLowerCase().includes(q)
+            );
+        }
+
+        if (cloudProvider !== 'all') {
+            rows = rows.filter(r => r.provider === cloudProvider);
+        }
+
+        if (cloudSort === 'z-a') {
+            rows.sort((a, b) => b.name.localeCompare(a.name));
+        } else if (cloudSort === 'provider') {
+            rows.sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
+        } else {
+            rows.sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        return rows;
+    }, [availableCloudModels, cloudQuery, cloudSort, cloudProvider]);
 
     const renderModelItem = (m: { name?: string, id?: string, label?: string }, isSwarm = false) => {
         const id = m.id || m.name || '';
@@ -106,6 +161,95 @@ export function ModelSelector({ onClose }: Props) {
         );
     };
 
+    const formatPrice = (n: number | null) => {
+        if (n === null || Number.isNaN(n)) return null;
+        if (n < 0.001) return '<$0.001';
+        if (n < 1) return `$${n.toFixed(3)}`;
+        return `$${n.toFixed(2)}`;
+    };
+
+    const filteredOpenRouterModels = useMemo(() => {
+        let rows = [...openRouterModels];
+
+        const q = openRouterQuery.trim().toLowerCase();
+        if (q) {
+            rows = rows.filter(r =>
+                r.label.toLowerCase().includes(q) || r.id.toLowerCase().includes(q)
+            );
+        }
+
+        if (toolsOnly) rows = rows.filter(r => r.supportsTools);
+        if (visionOnly) rows = rows.filter(r => r.supportsVision);
+
+        if (openRouterSort === 'cheapest-in') {
+            rows.sort((a, b) => (a.inputPer1M ?? Number.POSITIVE_INFINITY) - (b.inputPer1M ?? Number.POSITIVE_INFINITY));
+        } else if (openRouterSort === 'cheapest-out') {
+            rows.sort((a, b) => (a.outputPer1M ?? Number.POSITIVE_INFINITY) - (b.outputPer1M ?? Number.POSITIVE_INFINITY));
+        } else if (openRouterSort === 'largest-context') {
+            rows.sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
+        } else {
+            rows.sort((a, b) => a.label.localeCompare(b.label));
+        }
+
+        return rows;
+    }, [openRouterModels, openRouterQuery, toolsOnly, visionOnly, openRouterSort]);
+
+    const renderOpenRouterItem = (m: {
+        id: string;
+        label: string;
+        contextWindow: number | null;
+        inputPer1M: number | null;
+        outputPer1M: number | null;
+        supportsTools: boolean;
+        supportsVision: boolean;
+    }) => {
+        const isSelected = selectedModel === m.id;
+        const inPrice = formatPrice(m.inputPer1M);
+        const outPrice = formatPrice(m.outputPer1M);
+
+        return (
+            <div
+                key={m.id}
+                onClick={() => { setSelectedModel(m.id); onClose(); }}
+                style={{
+                    padding: '10px 16px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: isSelected ? 'var(--accent-light)' : 'transparent',
+                    borderBottom: '1px solid var(--border-light)'
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: isSelected ? 'var(--accent)' : 'transparent', border: isSelected ? 'none' : '1px solid var(--accent)' }} />
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: isSelected ? 600 : 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {m.label}
+                        </div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <span>{m.contextWindow ? `${m.contextWindow.toLocaleString()} ctx` : 'ctx ?'}</span>
+                            <span>{inPrice ? `in ${inPrice}/1M` : 'in ?'}</span>
+                            <span>{outPrice ? `out ${outPrice}/1M` : 'out ?'}</span>
+                        </div>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
+                    {m.supportsTools && (
+                        <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700, padding: '2px 6px', borderRadius: 4, color: '#1b6c2e', background: 'rgba(27,108,46,0.12)' }}>
+                            Tools
+                        </span>
+                    )}
+                    {m.supportsVision && (
+                        <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700, padding: '2px 6px', borderRadius: 4, color: '#774000', background: 'rgba(230,138,0,0.14)' }}>
+                            Vision
+                        </span>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <>
             <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
@@ -136,7 +280,7 @@ export function ModelSelector({ onClose }: Props) {
                 <div style={{ padding: '0 16px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-muted)', fontWeight: 600 }}>Local Models (Free)</div>
                 {localModels.length === 0 ? (
                     <div style={{ padding: '8px 16px', fontSize: 13, color: 'var(--text-secondary)' }}>
-                        No local models found. Install one via `ollama pull …`.
+                        No local Ollama models detected yet. VIBE auto-refreshes this list.
                     </div>
                 ) : (
                     <div style={{ maxHeight: 200, overflowY: 'auto' }}>
@@ -158,11 +302,168 @@ export function ModelSelector({ onClose }: Props) {
                 
                 <div style={{ margin: '8px 0', borderTop: '1px solid var(--border-light)' }} />
                 <div style={{ padding: '8px 16px 4px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-muted)', fontWeight: 600 }}>Cloud Models (API)</div>
+                {availableCloudModels.length > 0 && (
+                    <div style={{ padding: '4px 16px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <input
+                            value={cloudQuery}
+                            onChange={e => setCloudQuery(e.target.value)}
+                            placeholder="Search Cloud API models..."
+                            style={{
+                                width: '100%',
+                                padding: '6px 8px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border)',
+                                background: '#fff',
+                                fontSize: 12,
+                                color: 'var(--text)',
+                                outline: 'none'
+                            }}
+                        />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select
+                                value={cloudSort}
+                                onChange={e => setCloudSort(e.target.value as 'a-z' | 'z-a' | 'provider')}
+                                style={{
+                                    padding: '5px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid var(--border)',
+                                    background: '#fff',
+                                    fontSize: 11,
+                                    color: 'var(--text)'
+                                }}
+                            >
+                                <option value="a-z">Sort: A-Z</option>
+                                <option value="z-a">Sort: Z-A</option>
+                                <option value="provider">Sort: Provider</option>
+                            </select>
+                            <select
+                                value={cloudProvider}
+                                onChange={e => setCloudProvider(e.target.value as 'all' | 'gemini' | 'claude' | 'openai' | 'deepseek' | 'groq')}
+                                style={{
+                                    padding: '5px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid var(--border)',
+                                    background: '#fff',
+                                    fontSize: 11,
+                                    color: 'var(--text)'
+                                }}
+                            >
+                                <option value="all">Provider: All</option>
+                                <option value="gemini">Gemini</option>
+                                <option value="claude">Claude</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="deepseek">DeepSeek</option>
+                                <option value="groq">Groq</option>
+                            </select>
+                            <button
+                                onClick={() => {
+                                    setCloudQuery('');
+                                    setCloudSort('a-z');
+                                    setCloudProvider('all');
+                                }}
+                                style={{
+                                    padding: '5px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid var(--border)',
+                                    background: 'rgba(0,0,0,0.03)',
+                                    fontSize: 11,
+                                    color: 'var(--text-muted)',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Clear
+                            </button>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                {filteredCloudModels.length}/{availableCloudModels.length}
+                            </span>
+                        </div>
+                    </div>
+                )}
                 <div style={{ maxHeight: 250, overflowY: 'auto' }}>
                     {availableCloudModels.length === 0 ? (
                         <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)' }}>No API keys found. Add them in Settings.</div>
                     ) : (
-                        availableCloudModels.map(m => renderModelItem({ id: m.id, label: m.name }))
+                        filteredCloudModels.map(m => renderModelItem({ id: m.id, label: m.name }))
+                    )}
+                </div>
+
+                <div style={{ margin: '8px 0', borderTop: '1px solid var(--border-light)' }} />
+                <div style={{ padding: '8px 16px 4px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: '#2f6fec', fontWeight: 700 }}>OpenRouter (Live)</div>
+                {!!apiKeys.openrouter && openRouterModels.length > 0 && (
+                    <div style={{ padding: '4px 16px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <input
+                            value={openRouterQuery}
+                            onChange={e => setOpenRouterQuery(e.target.value)}
+                            placeholder="Search OpenRouter models..."
+                            style={{
+                                width: '100%',
+                                padding: '6px 8px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border)',
+                                background: '#fff',
+                                fontSize: 12,
+                                color: 'var(--text)',
+                                outline: 'none'
+                            }}
+                        />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select
+                                value={openRouterSort}
+                                onChange={e => setOpenRouterSort(e.target.value as 'recommended' | 'cheapest-in' | 'cheapest-out' | 'largest-context')}
+                                style={{
+                                    padding: '5px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid var(--border)',
+                                    background: '#fff',
+                                    fontSize: 11,
+                                    color: 'var(--text)'
+                                }}
+                            >
+                                <option value="recommended">Sort: A-Z</option>
+                                <option value="cheapest-in">Sort: Cheapest Input</option>
+                                <option value="cheapest-out">Sort: Cheapest Output</option>
+                                <option value="largest-context">Sort: Largest Context</option>
+                            </select>
+                            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <input type="checkbox" checked={toolsOnly} onChange={e => setToolsOnly(e.target.checked)} />
+                                Tools only
+                            </label>
+                            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <input type="checkbox" checked={visionOnly} onChange={e => setVisionOnly(e.target.checked)} />
+                                Vision only
+                            </label>
+                            <button
+                                onClick={() => {
+                                    setOpenRouterQuery('');
+                                    setOpenRouterSort('recommended');
+                                    setToolsOnly(false);
+                                    setVisionOnly(false);
+                                }}
+                                style={{
+                                    padding: '5px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid var(--border)',
+                                    background: 'rgba(0,0,0,0.03)',
+                                    fontSize: 11,
+                                    color: 'var(--text-muted)',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Clear
+                            </button>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                {filteredOpenRouterModels.length}/{openRouterModels.length}
+                            </span>
+                        </div>
+                    </div>
+                )}
+                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                    {!apiKeys.openrouter ? (
+                        <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)' }}>Add OpenRouter key in Settings to load full catalog.</div>
+                    ) : openRouterModels.length === 0 ? (
+                        <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)' }}>No OpenRouter models returned.</div>
+                    ) : (
+                        filteredOpenRouterModels.map(m => renderOpenRouterItem(m))
                     )}
                 </div>
 

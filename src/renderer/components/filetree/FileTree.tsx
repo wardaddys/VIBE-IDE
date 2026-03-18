@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useUIStore } from '../../store/ui';
+import { useSettingsStore } from '../../store/settings';
 import { useFileSystem } from '../../hooks/useFileSystem';
 import { FileTreeItem } from './FileTreeItem';
 import type { FileEntry } from '../../../shared/types';
@@ -37,10 +38,31 @@ export function FileTree() {
         });
     }, [projectPath]);
 
+    // Auto-start background agents for existing project on mount
+    useEffect(() => {
+        const existingPath = useUIStore.getState().projectPath;
+        if (existingPath) {
+            const settings = useSettingsStore.getState();
+            window.vibe.startBackgroundAgents(existingPath, {
+                obsidianKey: settings.apiKeys.obsidian || undefined,
+                apiKeys: settings.apiKeys,
+                collectorModel: settings.backgroundModels.collector,
+                reviewerModel: settings.backgroundModels.reviewer,
+            }).catch(() => {});
+        }
+    }, []);
+
     const handleOpenFolder = async () => {
         const p = await openFolder();
         if (p) {
             setProjectPath(p);
+            const settings = useSettingsStore.getState();
+            window.vibe.startBackgroundAgents(p, {
+                obsidianKey: settings.apiKeys.obsidian || undefined,
+                apiKeys: settings.apiKeys,
+                collectorModel: settings.backgroundModels.collector,
+                reviewerModel: settings.backgroundModels.reviewer,
+            }).catch(() => {});
             try {
                 const vibemd = await window.vibe.readFile(`${p}/VIBE.md`);
                 useUIStore.getState().setVibeInstructions(vibemd);

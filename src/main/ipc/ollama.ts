@@ -1,53 +1,133 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import type { ChatMessage } from '../../shared/types';
+import { buildChatRoute } from './modelRouter';
+import { execSync, spawn } from 'node:child_process';
 
-const OLLAMA_BASE = 'http://localhost:11434';
+const OLLAMA_API_BASE = 'http://localhost:11434/api';
 let abortController: AbortController | null = null;
+let isBootingOllama = false;
 
-export const OLLAMA_ONLY_MODELS = new Set<string>([
-    'gpt-oss-120b',
-]);
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pingOllama(): Promise<boolean> {
+    try {
+        const res = await fetch(`${OLLAMA_API_BASE}/tags`);
+        return !!res.ok;
+    } catch {
+        return false;
+    }
+}
+
+async function ensureOllamaRunning(): Promise<boolean> {
+    if (await pingOllama()) return true;
+
+    if (!isBootingOllama) {
+        isBootingOllama = true;
+        try {
+            const child = spawn('ollama', ['serve'], {
+                detached: true,
+                stdio: 'ignore',
+                windowsHide: true,
+            });
+            child.unref();
+        } catch {
+            // Non-fatal: ping loop below will simply fail.
+        } finally {
+            isBootingOllama = false;
+        }
+    }
+
+    // Wait briefly for service start-up.
+    for (let i = 0; i < 12; i++) {
+        await sleep(500);
+        if (await pingOllama()) return true;
+    }
+
+    return false;
+}
+
+function listModelsFromCli(): string[] {
+    try {
+        const out = execSync('ollama list', {
+            windowsHide: true,
+            encoding: 'utf8',
+        }).trim();
+
+        if (!out) return [];
+        const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length <= 1) return [];
+
+        return lines
+            .slice(1) // Skip header row
+            .map((line) => line.split(/\s{2,}/)[0]?.trim())
+            .filter((name): name is string => !!name);
+    } catch {
+        return [];
+    }
+}
 
 export function registerOllamaHandlers(mainWindow: BrowserWindow) {
     ipcMain.handle('ollama:detect', async () => {
-        try {
-            const res = await fetch(`${OLLAMA_BASE}/api/tags`);
-            if (res.ok) return { detected: true, version: 'Local' };
-            return { detected: false };
-        } catch { return { detected: false }; }
+        const detected = await ensureOllamaRunning();
+        return detected ? { detected: true, version: 'Local' } : { detected: false };
     });
 
     ipcMain.handle('ollama:status', async () => {
-        try {
-            const res = await fetch(`${OLLAMA_BASE}/api/tags`);
-            return !!res.ok;
-        } catch { return false; }
+        return ensureOllamaRunning();
     });
 
     ipcMain.handle('ollama:listModels', async () => {
         try {
-            // /api/tags returns ALL installed models regardless
-            // of whether they are loaded in memory or not
-            const res = await fetch(`${OLLAMA_BASE}/api/tags`, {
-                method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            if (!res.ok) return [];
-            const data = await res.json();
-            // data.models is array of { name, size, digest, details }
-            // Return all names sorted alphabetically
-            const models: string[] = (data.models || [])
-                .map((m: any) => m.name as string)
-                .sort((a: string, b: string) => a.localeCompare(b));
-            return models;
+            await ensureOllamaRunning();
+
+            // Merge installed models (/tags) with currently loaded models (/ps)
+            // so UI detection works even when a model is loaded but not present in tags.
+            const [tagsRes, psRes] = await Promise.all([
+                fetch(`${OLLAMA_API_BASE}/tags`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                }).catch(() => null),
+                fetch(`${OLLAMA_API_BASE}/ps`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                }).catch(() => null)
+            ]);
+
+            const names: string[] = [];
+
+            if (tagsRes?.ok) {
+                const tagsData = await tagsRes.json();
+                names.push(...(tagsData.models || []).map((m: any) => String(m.name || '')));
+            }
+
+            if (psRes?.ok) {
+                const psData = await psRes.json();
+                names.push(...(psData.models || []).map((m: any) => String(m.name || '')));
+            }
+
+            const deduped = Array.from(new Set(
+                names.map(n => n.trim()).filter(Boolean)
+            )).sort((a, b) => a.localeCompare(b));
+
+            if (deduped.length > 0) {
+                return deduped;
+            }
+
+            // Fallback: ask local CLI directly (useful when API endpoints are up
+            // but return empty or when tags/ps are desynced on certain setups).
+            const cliModels = listModelsFromCli();
+            return Array.from(new Set(cliModels)).sort((a, b) => a.localeCompare(b));
         } catch {
-            return [];
+            return listModelsFromCli();
         }
     });
 
     ipcMain.handle('ollama:getLoadedModels', async () => {
         try {
-            const res = await fetch(`${OLLAMA_BASE}/api/ps`);
+            await ensureOllamaRunning();
+            const res = await fetch(`${OLLAMA_API_BASE}/ps`);
             if (!res.ok) return [];
             const data = await res.json();
             return (data.models || []).map((m: any) => m.name as string);
@@ -56,9 +136,79 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
         }
     });
 
+    ipcMain.handle('openrouter:listModels', async (_event, apiKeys?: Record<string, string>) => {
+        try {
+            const key = apiKeys?.openrouter || '';
+            if (!key) return [];
+
+            const res = await fetch('https://openrouter.ai/api/v1/models', {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${key}`,
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            if (!res.ok) return [];
+            const data = await res.json() as any;
+            const rows = Array.isArray(data?.data) ? data.data : [];
+
+            return rows.map((m: any) => {
+                const pricingPrompt = Number(m?.pricing?.prompt || 0);
+                const pricingCompletion = Number(m?.pricing?.completion || 0);
+                return {
+                    id: `openrouter:${m.id}`,
+                    provider: 'openrouter',
+                    label: m.name || m.id,
+                    contextWindow: m.context_length || null,
+                    inputPer1M: Number.isFinite(pricingPrompt) ? pricingPrompt * 1_000_000 : null,
+                    outputPer1M: Number.isFinite(pricingCompletion) ? pricingCompletion * 1_000_000 : null,
+                    supportsTools: !!m.supported_parameters?.includes?.('tools'),
+                    supportsVision: !!m.architecture?.input_modalities?.includes?.('image'),
+                };
+            });
+        } catch {
+            return [];
+        }
+    });
+
+    ipcMain.handle('hf:searchModels', async (_event, query: string, apiKeys?: Record<string, string>) => {
+        try {
+            const params = new URLSearchParams({
+                search: (query || 'instruct').trim(),
+                filter: 'text-generation',
+                sort: 'likes',
+                direction: '-1',
+                limit: '20',
+                full: 'false',
+                config: 'false',
+            });
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (apiKeys?.hf) headers.Authorization = `Bearer ${apiKeys.hf}`;
+
+            const res = await fetch(`https://huggingface.co/api/models?${params.toString()}`, {
+                method: 'GET',
+                headers,
+            });
+            if (!res.ok) return [];
+
+            const rows = await res.json() as any[];
+            return (rows || []).map((m: any) => ({
+                id: m.id,
+                likes: m.likes || 0,
+                downloads: m.downloads || 0,
+                pipeline_tag: m.pipeline_tag || '',
+                tags: m.tags || [],
+            }));
+        } catch {
+            return [];
+        }
+    });
+
     ipcMain.handle('ollama:getCapabilities', async (_event, modelName: string) => {
         try {
-            const res = await fetch(`${OLLAMA_BASE}/api/show`, {
+            await ensureOllamaRunning();
+            const res = await fetch(`${OLLAMA_API_BASE}/show`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: modelName })
@@ -140,90 +290,19 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
         abortController = new AbortController();
 
         try {
-            let endpoint = '';
-            let headers: any = { 'Content-Type': 'application/json' };
-            let body: any = {};
-            let isAnthropic = false;
-            let isGemini = false;
-
-            const sysMsg = messages.find((m: ChatMessage) => m.role === 'system')?.content || '';
-            const userMsgs = messages.filter((m: ChatMessage) => m.role !== 'system');
-
-            const thinkBudgets = { low: 2048, medium: 8192, high: 16000 };
-            const thinkTokenBudget = thinkOptions?.enabled && thinkOptions?.level
-                ? (thinkBudgets as any)[thinkOptions.level]
-                : null;
-
-            // 1. ABSOLUTE PRIORITY: Route -cloud and local models to Ollama immediately.
-            if (model.includes('-cloud') || OLLAMA_ONLY_MODELS.has(model)) {
-                endpoint = `${OLLAMA_BASE}/api/chat`;
-                body = { 
-                    model, 
-                    messages, 
-                    stream: true, 
-                    options: { 
-                        num_ctx: 16384,
-                        ...(thinkTokenBudget ? { num_predict: thinkTokenBudget } : {})
-                    } 
-                };
-            }
-            // 2. CLOUD APIS
-            else if (model.includes('claude')) {
-                if (!apiKeys?.claude) throw new Error('Claude API key missing.');
-                endpoint = 'https://api.anthropic.com/v1/messages';
-                headers['x-api-key'] = apiKeys.claude;
-                headers['anthropic-version'] = '2023-06-01';
-                headers['anthropic-dangerous-direct-browser-access'] = 'true';
-                isAnthropic = true;
-                body = { 
-                    model, 
-                    max_tokens: thinkTokenBudget ? thinkTokenBudget + 4096 : 4096, 
-                    system: sysMsg, 
-                    messages: userMsgs, 
-                    stream: true,
-                    ...(thinkTokenBudget ? { thinking: { type: 'enabled', budget_tokens: thinkTokenBudget } } : {})
-                };
-            } 
-            else if (model.includes('gpt-') || model.includes('deepseek') || model.includes('llama3')) {
-                let key = '';
-                if (model.includes('gpt-')) { endpoint = 'https://api.openai.com/v1/chat/completions'; key = apiKeys?.openai || ''; }
-                if (model.includes('deepseek')) { endpoint = 'https://api.deepseek.com/chat/completions'; key = apiKeys?.deepseek || ''; }
-                if (model.includes('llama3')) { endpoint = 'https://api.groq.com/openai/v1/chat/completions'; key = apiKeys?.groq || ''; }
-                
-                if (!key) throw new Error(`API key missing for Cloud Model: ${model}`);
-                headers['Authorization'] = `Bearer ${key}`;
-                body = { model, messages, stream: true };
-            } 
-            else if (model.includes('gemini')) {
-                if (!apiKeys?.gemini) throw new Error('Gemini API key missing.');
-                isGemini = true;
-                endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKeys.gemini}`;
-                body = { contents: userMsgs.map((m: ChatMessage) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })) };
-                if (sysMsg.trim() !== '') body.systemInstruction = { parts: [{ text: sysMsg }] };
-            } 
-            else if (model.startsWith('hf:')) {
-                const hfModelId = model.replace('hf:', '');
-                endpoint = `https://router.huggingface.co/hf-inference/models/${hfModelId}/v1/chat/completions`;
-                if (apiKeys?.hf) {
-                    headers['Authorization'] = `Bearer ${apiKeys.hf}`;
+            const route = buildChatRoute(model, messages as ChatMessage[], apiKeys, { stream: true, thinkOptions });
+            if (route.mode === 'ollama') {
+                const ok = await ensureOllamaRunning();
+                if (!ok) {
+                    throw new Error('Ollama is not running. Start it with `ollama serve`.');
                 }
-                body = { model: hfModelId, messages, stream: true, max_tokens: 2048 };
             }
-            else {
-                // Fallback for standard local models (e.g. llama3.2:latest)
-                endpoint = `${OLLAMA_BASE}/api/chat`;
-                body = { 
-                    model, 
-                    messages, 
-                    stream: true, 
-                    options: { 
-                        num_ctx: 16384,
-                        ...(thinkTokenBudget ? { num_predict: thinkTokenBudget } : {})
-                    } 
-                };
-            }
-
-            const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body), signal: abortController.signal });
+            const res = await fetch(route.endpoint, {
+                method: 'POST',
+                headers: route.headers,
+                body: JSON.stringify(route.body),
+                signal: abortController.signal,
+            });
             if (!res.ok) throw new Error(`API Error ${res.status}: ${await res.text()}`);
 
             const reader = res.body?.getReader();
@@ -243,18 +322,18 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
                     if (!tLine || tLine === 'data: [DONE]') continue;
                     try {
                         let contentChunk = '';
-                        if (isGemini && tLine.startsWith('data: ')) {
+                        if (route.mode === 'gemini' && tLine.startsWith('data: ')) {
                             contentChunk = JSON.parse(tLine.slice(6)).candidates?.[0]?.content?.parts?.[0]?.text || '';
                         } 
-                        else if (isAnthropic && tLine.startsWith('data: ')) {
+                        else if (route.mode === 'anthropic' && tLine.startsWith('data: ')) {
                             const j = JSON.parse(tLine.slice(6));
                             if (j.type === 'content_block_delta') contentChunk = j.delta?.text || '';
                         }
-                        else if ((model.includes('gpt-') || model.includes('deepseek') || model.includes('llama3') || model.startsWith('hf:')) && tLine.startsWith('data: ')) {
+                        else if (route.mode === 'openai' && tLine.startsWith('data: ')) {
                             const parsed = JSON.parse(tLine.slice(6));
                             contentChunk = parsed.choices?.[0]?.delta?.content || '';
                         }
-                        else if (endpoint.includes('localhost') || endpoint.includes('127.0.0.1')) {
+                        else if (route.mode === 'ollama') {
                             contentChunk = JSON.parse(tLine).message?.content || '';
                         }
 
@@ -267,7 +346,11 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
             if (!mainWindow.isDestroyed()) mainWindow.webContents.send('ollama:stream', { content: '', done: true });
 
         } catch (error: any) {
-            if (error.name !== 'AbortError' && !mainWindow.isDestroyed()) {
+            if (error.name === 'AbortError') {
+                if (!mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('ollama:stream', { content: '', done: true });
+                }
+            } else if (!mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('ollama:stream', { content: `\n\n🚨 **System Error:** ${error.message}`, done: true });
             }
         } finally { abortController = null; }

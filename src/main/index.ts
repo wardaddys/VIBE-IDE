@@ -7,6 +7,9 @@ import { registerFileSystemHandlers } from './ipc/filesystem';
 import { registerTerminalHandlers } from './ipc/terminal';
 import { registerOllamaHandlers } from './ipc/ollama';
 import { registerObsidianHandlers } from './ipc/obsidian';
+import { backgroundManager } from './ipc/agent/backgroundManager';
+import type { BackgroundAgentConfig } from '../shared/types';
+import { IPC_CHANNELS } from '../shared/ipcContracts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,8 +31,9 @@ function createLogWindow() {
         title: 'VIBE Debug Logs',
         autoHideMenuBar: true,
         webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true
         }
     });
 
@@ -38,14 +42,13 @@ function createLogWindow() {
         <body style="background:#1e1e1e; color:#00d4aa; font-family:monospace; font-size:12px; padding:10px; word-wrap:break-word;">
             <div id="logs" style="padding-bottom: 20px;">=== VIBE SESSION LOGS ===<br/><br/></div>
             <script>
-                const { ipcRenderer } = require('electron');
-                ipcRenderer.on('log', (e, msg) => {
+                window.appendLog = (msg) => {
                     const logs = document.getElementById('logs');
                     const div = document.createElement('div');
-                    div.innerHTML = msg;
+                    div.textContent = String(msg || '');
                     logs.appendChild(div);
                     window.scrollTo(0, document.body.scrollHeight);
-                });
+                };
             </script>
         </body>
         </html>
@@ -59,18 +62,20 @@ function createLogWindow() {
 const origLog = console.log;
 const origError = console.error;
 
+const publishLogLine = (line: string) => {
+    if (!logWindow || logWindow.isDestroyed()) return;
+    const payload = JSON.stringify(line);
+    logWindow.webContents.executeJavaScript(`window.appendLog && window.appendLog(${payload});`).catch(() => {});
+};
+
 console.log = (...args) => {
     origLog(...args);
-    if (logWindow && !logWindow.isDestroyed()) {
-        logWindow.webContents.send('log', `[INFO] ${args.join(' ')}`);
-    }
+    publishLogLine(`[INFO] ${args.join(' ')}`);
 };
 
 console.error = (...args) => {
     origError(...args);
-    if (logWindow && !logWindow.isDestroyed()) {
-        logWindow.webContents.send('log', `<span style="color:#ff4466">[ERROR] ${args.join(' ')}</span>`);
-    }
+    publishLogLine(`[ERROR] ${args.join(' ')}`);
 };
 
 ipcMain.handle('log:renderer', (_event, msg) => {
@@ -101,6 +106,37 @@ function createWindow() {
     registerOllamaHandlers(mainWindow);
     registerObsidianHandlers();
 
+    ipcMain.handle(IPC_CHANNELS.agent.startForProject, async (_event, projectPath: string, config?: BackgroundAgentConfig) => {
+        backgroundManager.startForProject(projectPath, config);
+        return { success: true };
+    });
+
+    ipcMain.handle(IPC_CHANNELS.agent.getBriefing, async () => {
+        return backgroundManager.getBriefing();
+    });
+
+    ipcMain.handle(IPC_CHANNELS.agent.logAction, async (_event, description: string) => {
+        backgroundManager.logAgentAction(description);
+    });
+
+    ipcMain.handle(IPC_CHANNELS.agent.generateExport, async (_event, outputPath: string) => {
+        return backgroundManager.generateExport(outputPath);
+    });
+
+    ipcMain.handle(IPC_CHANNELS.agent.setObsidianKey, async (_event, key: string) => {
+        backgroundManager.setObsidianKey(key);
+    });
+
+    ipcMain.handle(IPC_CHANNELS.agent.triggerBriefing, async () => {
+        backgroundManager.triggerBriefing();
+        return { success: true };
+    });
+
+    // Neural widget status polling
+    ipcMain.handle(IPC_CHANNELS.agent.getStatus, async () => {
+        return backgroundManager.getAgentStatus();
+    });
+
     ipcMain.handle('window:minimize', () => mainWindow?.minimize());
     ipcMain.handle('window:maximize', () => {
         if (mainWindow?.isMaximized()) {
@@ -113,10 +149,10 @@ function createWindow() {
     ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized());
 
     mainWindow.on('maximize', () => {
-        mainWindow?.webContents.send('window:maximized', true);
+        mainWindow?.webContents.send(IPC_CHANNELS.window.maximizeEvent, true);
     });
     mainWindow.on('unmaximize', () => {
-        mainWindow?.webContents.send('window:maximized', false);
+        mainWindow?.webContents.send(IPC_CHANNELS.window.maximizeEvent, false);
     });
 
     if (VITE_DEV_SERVER_URL) {

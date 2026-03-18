@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { GlassPanel } from '../common/GlassPanel';
 import { useHFStore } from '../../store/huggingface';
 import { useSettingsStore } from '../../store/settings';
@@ -26,20 +26,7 @@ export function HuggingFacePicker({ onClose }: Props) {
         setLoading(true);
         setError('');
         try {
-            const params = new URLSearchParams({
-                search: query || 'instruct',
-                filter: 'text-generation',
-                sort: 'likes',
-                direction: '-1',
-                limit: '20',
-                full: 'false',
-                config: 'false',
-            });
-            const headers: any = {};
-            if (apiKeys?.hf) headers['Authorization'] = `Bearer ${apiKeys.hf}`;
-            const res = await fetch(`https://huggingface.co/api/models?${params}`, { headers });
-            if (!res.ok) throw new Error(`HF API error ${res.status}`);
-            const data = await res.json();
+            const data = await window.vibe.searchHuggingFaceModels(query || 'instruct', apiKeys);
             setResults(data);
         } catch (e: any) {
             setError(e.message || 'Search failed');

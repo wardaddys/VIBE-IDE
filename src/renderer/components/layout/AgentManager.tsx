@@ -3,7 +3,6 @@ import { GlassPanel } from '../common/GlassPanel';
 import { useOllamaStore } from '../../store/ollama';
 import { useSettingsStore } from '../../store/settings';
 import { useSwarmStore, AgentNode } from '../../store/swarms';
-import { getModelTags } from '../../utils/tags';
 
 export function AgentManager({ onClose }: { onClose: () => void }) {
     const localModels = useOllamaStore(state => state.models);
@@ -23,7 +22,9 @@ export function AgentManager({ onClose }: { onClose: () => void }) {
         { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
         { id: 'deepseek-chat', name: 'DeepSeek V3', provider: 'deepseek' },
         { id: 'deepseek-coder', name: 'DeepSeek Coder', provider: 'deepseek' },
-        { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B (Groq)', provider: 'groq' }
+        { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B (Groq)', provider: 'groq' },
+        { id: 'openrouter:openai/gpt-4o-mini', name: 'OpenRouter GPT-4o Mini', provider: 'openrouter' },
+        { id: 'openrouter:anthropic/claude-3.5-sonnet', name: 'OpenRouter Claude 3.5 Sonnet', provider: 'openrouter' }
     ];
     const availableCloudModels = cloudRoster.filter(m => !!apiKeys[m.provider as keyof typeof apiKeys]);
 

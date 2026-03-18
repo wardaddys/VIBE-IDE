@@ -9,6 +9,7 @@ import { useWorkspaceStore } from './store/workspaces';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { useBackgroundTerminal } from './hooks/useBackgroundTerminal';
 import { streamBus } from './utils/streamBus';
+import { NeuralWidget } from './components/agent/NeuralWidget';
 
 export default function App() {
     const setConnectionState = useOllamaStore(state => state.setConnectionState);
@@ -118,7 +119,9 @@ export default function App() {
                     thinkBufferRef.current = '';
                     inThinkBlockRef.current = false;
                 }
-                store.setIsGenerating(false);
+                if (store.agentStep === 0) {
+                    store.setIsGenerating(false);
+                }
                 streamBus.emit({ content: '', done: true });
                 window.vibe.log('[STREAM] Stream completed and resolved');
                 const ws = useWorkspaceStore.getState();
@@ -156,6 +159,7 @@ export default function App() {
                 <Sidebar />
                 <MainArea />
             </div>
+            <NeuralWidget />
         </div>
     );
 }

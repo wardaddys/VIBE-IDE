@@ -9,6 +9,8 @@ export interface ProjectMemory {
     updatedAt: string;
 }
 
+export type ChatMode = 'auto' | 'chat' | 'agent';
+
 interface UIState {
     sidebarWidth: number;
     terminalHeight: number;
@@ -17,6 +19,7 @@ interface UIState {
     ollamaConnected: boolean;
     vibeInstructions: string | null;
     projectMemory: ProjectMemory | null;
+    chatMode: ChatMode;
     setSidebarWidth: (width: number) => void;
     setTerminalHeight: (height: number) => void;
     setShowModelPicker: (show: boolean) => void;
@@ -24,6 +27,7 @@ interface UIState {
     setVibeInstructions: (instructions: string | null) => void;
     setOllamaConnected: (connected: boolean) => void;
     setProjectMemory: (memory: ProjectMemory | null) => void;
+    setChatMode: (mode: ChatMode) => void;
     isLoggedIn: boolean;
     setIsLoggedIn: (v: boolean) => void;
 }
@@ -37,6 +41,7 @@ export const useUIStore = create<UIState>()(
             projectPath: null,
             vibeInstructions: null,
             projectMemory: null,
+            chatMode: 'auto',
             ollamaConnected: false,
             setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
             setTerminalHeight: (terminalHeight) => set({ terminalHeight }),
@@ -45,6 +50,7 @@ export const useUIStore = create<UIState>()(
             setVibeInstructions: (vibeInstructions) => set({ vibeInstructions }),
             setOllamaConnected: (ollamaConnected) => set({ ollamaConnected }),
             setProjectMemory: (projectMemory) => set({ projectMemory }),
+            setChatMode: (chatMode) => set({ chatMode }),
             isLoggedIn: false,
             setIsLoggedIn: (isLoggedIn) => set({ isLoggedIn })
         }),

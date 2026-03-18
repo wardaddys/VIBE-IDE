@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": [
+    "src/main/index.ts",
+    "src/main/preload.ts",
+    "src/main/ipc/modelRouter.ts",
+    "src/main/ipc/modelRouter.test.ts",
+    "src/renderer/components/layout/ChatBar.tsx",
+    "src/renderer/services/agent/**/*.ts",
+    "src/shared/types.ts",
+    "src/shared/ipcContracts.ts",
+    "src/shared/ipcContracts.test.ts"
+  ]
+}

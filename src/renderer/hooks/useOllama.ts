@@ -1,12 +1,12 @@
 import { useCallback } from 'react';
-import type { OllamaModel, ChatMessage } from '../../shared/types';
+import type { ChatMessage } from '../../shared/types';
 
 export function useOllama() {
     const detectOllama = useCallback(async (): Promise<{ detected: boolean; version?: string }> => {
         return window.vibe.detectOllama();
     }, []);
 
-    const listModels = useCallback(async (): Promise<OllamaModel[]> => {
+    const listModels = useCallback(async (): Promise<string[]> => {
         return window.vibe.listModels();
     }, []);
 

@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { ChatMessage, FileEntry } from '../shared/types';
+import type { BackgroundAgentConfig, ChatMessage, FileEntry, VibeAPI } from '../shared/types';
+import { IPC_CHANNELS } from '../shared/ipcContracts';
 
-contextBridge.exposeInMainWorld('vibe', {
+const vibeApi: VibeAPI = {
     // FILESYSTEM
     openFolder: () => ipcRenderer.invoke('fs:openFolder'),
     readDir: (dirPath: string): Promise<FileEntry[]> => ipcRenderer.invoke('fs:readDir', dirPath),
@@ -39,10 +40,32 @@ contextBridge.exposeInMainWorld('vibe', {
     stopGeneration: () => ipcRenderer.invoke('ollama:stop'),
     getModelCapabilities: (modelName: string) => ipcRenderer.invoke('ollama:getCapabilities', modelName),
     getLoadedModels: () => ipcRenderer.invoke('ollama:getLoadedModels'),
+    listOpenRouterModels: (apiKeys?: Record<string, string>) => ipcRenderer.invoke('openrouter:listModels', apiKeys),
+    searchHuggingFaceModels: (query: string, apiKeys?: Record<string, string>) => ipcRenderer.invoke('hf:searchModels', query, apiKeys),
+
+    // BACKGROUND AGENTS
+    startBackgroundAgents: (projectPath: string, config?: BackgroundAgentConfig) =>
+        ipcRenderer.invoke(IPC_CHANNELS.agent.startForProject, projectPath, config),
+    getBriefing: () =>
+        ipcRenderer.invoke(IPC_CHANNELS.agent.getBriefing),
+    logAgentAction: (description: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.agent.logAction, description),
+    generateNotebookExport: (outputPath: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.agent.generateExport, outputPath),
+    setObsidianKey: (key: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.agent.setObsidianKey, key),
+    triggerBriefing: () =>
+        ipcRenderer.invoke(IPC_CHANNELS.agent.triggerBriefing),
+    getAgentStatus: () =>
+        ipcRenderer.invoke(IPC_CHANNELS.agent.getStatus),
 
     // OBSIDIAN INTEGRATION
     obsidianPing: (apiKey: string) =>
         ipcRenderer.invoke('obsidian:ping', apiKey),
+    obsidianUpsertNote: (apiKey: string, vaultPath: string, content: string) =>
+        ipcRenderer.invoke('obsidian:upsertNote', apiKey, vaultPath, content),
+    obsidianAppendNote: (apiKey: string, vaultPath: string, content: string) =>
+        ipcRenderer.invoke('obsidian:appendNote', apiKey, vaultPath, content),
     obsidianUpdateProject: (
         apiKey: string,
         projectName: string,
@@ -79,4 +102,10 @@ contextBridge.exposeInMainWorld('vibe', {
     maximizeWindow: () => ipcRenderer.invoke('window:maximize'),
     closeWindow: () => ipcRenderer.invoke('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
-});
+    onWindowMaximized: (callback: (maximized: boolean) => void) => {
+        ipcRenderer.removeAllListeners(IPC_CHANNELS.window.maximizeEvent);
+        ipcRenderer.on(IPC_CHANNELS.window.maximizeEvent, (_event, maximized) => callback(!!maximized));
+    },
+};
+
+contextBridge.exposeInMainWorld('vibe', vibeApi);

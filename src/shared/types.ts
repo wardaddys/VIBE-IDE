@@ -31,6 +31,14 @@ export interface ModelCapability {
     think?: boolean;
     thinkBudget?: 'toggle' | 'tiered'; // toggle = on/off only, tiered = low/med/high
 }
+
+export interface BackgroundAgentConfig {
+    obsidianKey?: string;
+    apiKeys?: Record<string, string>;
+    collectorModel?: string;
+    reviewerModel?: string;
+}
+
 export interface VibeAPI {
     // Terminal
     createTerminal: (cwd?: string) => Promise<string>;
@@ -69,10 +77,52 @@ export interface VibeAPI {
         rawCapabilities: string[];
     } | null>;
     getLoadedModels: () => Promise<string[]>;
+    listOpenRouterModels: (apiKeys?: Record<string, string>) => Promise<Array<{
+        id: string;
+        provider: 'openrouter';
+        label: string;
+        contextWindow: number | null;
+        inputPer1M: number | null;
+        outputPer1M: number | null;
+        supportsTools: boolean;
+        supportsVision: boolean;
+    }>>;
+    searchHuggingFaceModels: (query: string, apiKeys?: Record<string, string>) => Promise<Array<{
+        id: string;
+        likes: number;
+        downloads: number;
+        pipeline_tag: string;
+        tags: string[];
+    }>>;
     log: (msg: string) => Promise<void>;
+
+    // Background Agents
+    startBackgroundAgents: (projectPath: string, config?: BackgroundAgentConfig) => Promise<{ success: boolean }>;
+    getBriefing: () => Promise<string>;
+    logAgentAction: (description: string) => Promise<void>;
+    generateNotebookExport: (outputPath: string) => Promise<boolean>;
+    setObsidianKey: (key: string) => Promise<void>;
+    triggerBriefing: () => Promise<{ success: boolean }>;
+    getAgentStatus: () => Promise<{
+        collector: {
+            isRunning: boolean;
+            eventCount: number;
+            lastEventTime: number | null;
+            isDistilling: boolean;
+            lastDistillTime: number | null;
+        };
+        reviewer: {
+            isRunning: boolean;
+            isSynthesizing: boolean;
+            lastBriefingTime: number;
+            briefingCount: number;
+        };
+    }>;
 
     // Obsidian Integration
     obsidianPing: (apiKey: string) => Promise<boolean>;
+    obsidianUpsertNote: (apiKey: string, vaultPath: string, content: string) => Promise<boolean>;
+    obsidianAppendNote: (apiKey: string, vaultPath: string, content: string) => Promise<boolean>;
     obsidianUpdateProject: (
         apiKey: string,
         projectName: string,
@@ -100,6 +150,7 @@ export interface VibeAPI {
     maximizeWindow: () => Promise<void>;
     closeWindow: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
+    onWindowMaximized: (callback: (maximized: boolean) => void) => void;
 }
 
 declare global {
