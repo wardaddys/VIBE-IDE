@@ -1,71 +1,113 @@
 # VIBE IDE
 
-**Agent-first integrated development environment.**
+Agent-first desktop IDE where AI can plan, execute, verify, and keep project context warm in the background.
 
-VIBE is a standalone Electron desktop application that combines a world-class code editor (Monaco), an integrated terminal, and an autonomous AI agent layer. It is built from the ground up to empower developers with AI-driven automation while maintaining full control over the development process.
+VIBE combines Monaco, terminal control, local/cloud model routing, and multi-agent orchestration in a standalone Electron app. It is not a VS Code fork.
 
-![VIBE IDE Logo](https://raw.githubusercontent.com/wardaddys/VIBE-IDE/main/index.html) *[Replace with real logo URL when available]*
+## Why VIBE
 
-## 🚀 Key Features
+- AI that does real work: planning, file edits, terminal execution, and verification loops.
+- Local-first by default: strong Ollama support with cloud providers layered on top.
+- Persistent project intelligence: background agents keep briefings and health snapshots up to date.
+- Built as a product: fast UI, strong TypeScript contracts, and testable service boundaries.
 
-- **Model Agnostic:** Seamlessly switch between local models via Ollama (free, offline) and cloud models (Claude, GPT, Gemini).
-- **Autonomous Agent Loop:** A sophisticated `PLAN → EXECUTE → OBSERVE → DECIDE` loop that handles complex tasks like code refactoring, terminal operations, and error correction.
-- **Wave-based Swarm Execution:** Orchestrate multiple specialist agents (Architect, Coder, etc.) in parallel waves based on their dependencies.
-- **Reasoning Token Parsing:** Built-in support for models like DeepSeek-R1, displaying structured thought processes in collapsible UI blocks.
-- **Tiered Thinking Budget:** Custom controls for thinking-enabled models, allowing you to balance reasoning depth with response speed.
-- **Project Memory:** Persistent session context stored in `.vibe/memory.json`, allowing agents to pick up exactly where they left off.
-- **Premium UI:** A stunning glass-morphism interface with mesh gradient backgrounds, designed for maximum focus and visual appeal.
+## What Is New In This Build
 
-## 🛠 Tech Stack
+- Refactored agent logic out of the chat UI into dedicated services:
+   - direct chat service
+   - orchestrator service
+   - swarm service
+   - plan/prompt/stream/runtime helpers
+- Added stop-aware cancellation hardening across direct, orchestrator, and swarm flows.
+- Added background intelligence agents (collector + reviewer) managed by a background manager.
+- Added live neural widget for background agent status visualization.
+- Added shared IPC channel contracts and tests for contract consistency.
+- Added strict typecheck profile and expanded Vitest coverage for key services.
+
+## Core Features
+
+- Multi-mode chat runtime:
+   - auto mode (intent-based switch)
+   - chat mode (direct assistant)
+   - agent mode (task execution loop)
+- Swarm execution with dependency-aware wave scheduling.
+- Unified model routing for Ollama, OpenAI-style APIs, Anthropic, Gemini, OpenRouter, and HuggingFace routing.
+- Thinking controls for supported models (toggle and tiered budgets).
+- Project context persistence under `.vibe/` (memory, plans, briefing, verification artifacts).
+- Obsidian integration hooks for project logs and briefing sync.
+
+## Architecture Snapshot
+
+- Electron main process:
+   - secure preload bridge
+   - IPC handlers for filesystem, terminal, model routing, obsidian, and background agents
+- Renderer:
+   - React + Zustand UI and state
+   - modular agent runtime services
+   - Monaco editor + terminal panel + model picker + neural widget
+- Shared:
+   - typed IPC contracts and shared app types
+
+## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
-| **Core** | Electron, Node.js |
-| **Frontend** | React 18, TypeScript, Vite |
-| **Editor** | Monaco Editor |
-| **Terminal** | xterm.js, node-pty |
-| **State** | Zustand |
-| **AI** | Ollama API, Cloud Proxy |
+|---|---|
+| Desktop | Electron |
+| Frontend | React 18, TypeScript, Vite |
+| Editor | Monaco Editor |
+| Terminal | xterm.js + node-pty |
+| State | Zustand |
+| Testing | Vitest |
+| Packaging | electron-builder |
 
-## 📐 Design Philosophy
-
-VIBE is built with a "Premium Product" mindset:
-- **Glassmorphism:** Frosted glass panels with backdrop blur and soft shadows.
-- **Dynamic Backgrounds:** Multi-layer radial gradients (blue + cyan + warm orange).
-- **Modern Typography:** DM Sans for UI and JetBrains Mono for code.
-- **Micro-animations:** Subtle transitions and interactive elements for a premium feel.
-
-## 📦 Getting Started
+## Quick Start
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (v18+)
-- [Ollama](https://ollama.com/) (for local models)
 
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/wardaddys/VIBE-IDE.git
-   cd VIBE-IDE
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the development server:
-   ```bash
-   npm run dev
-   ```
+- Node.js 18+
+- Ollama (optional but recommended for local-first usage)
 
-## 🏗 Project Roadmap
+### Setup
 
-- [x] **Phase 0:** Foundation (Electron + Monaco + Terminal)
-- [x] **Phase 1:** Agent Core (MCP tools, loop, Mission Control)
-- [ ] **Phase 2:** Model Router (Token proxy, credit system)
-- [ ] **Phase 3:** Workstation (VM viewer, browser preview, serial monitor)
+```bash
+git clone https://github.com/wardaddys/VIBE-IDE.git
+cd VIBE-IDE
+npm install
+```
 
-## 📄 License & Credits
+### Run
 
-Author: **Muhammad Saeed**  
-Digital creator and software engineer based in Pakistan.
+```bash
+npm run dev
+```
 
-*VIBE IDE — Empowering the next generation of autonomous development.*
+### Validate
+
+```bash
+npm test
+npm run typecheck:strict
+```
+
+Windows note: if PowerShell policy blocks npm scripts, use `npm.cmd` equivalents.
+
+## Repo Scripts
+
+- `npm run dev` - start Vite/Electron dev flow
+- `npm run build` - compile and package build
+- `npm test` - run Vitest test suite
+- `npm run test:watch` - watch mode tests
+- `npm run typecheck:strict` - strict TypeScript profile
+
+## Product Direction
+
+- Keep extracting orchestration logic out of UI components.
+- Expand contract-driven IPC coverage and tests.
+- Continue improving model routing quality, observability, and guardrails.
+- Grow background project intelligence and briefing quality.
+
+## Author
+
+Muhammad Saeed  
+Software engineer and digital creator based in Pakistan.
+
+VIBE IDE is built to make autonomous software development practical, transparent, and user-controlled.
