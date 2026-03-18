@@ -6,6 +6,7 @@ import { buildExecutionWaves, parsePlanSteps, type PlanStep } from './plan';
 import { buildCriticPrompt, buildExecutorPrompt, buildPlannerPrompt, buildVerifierPrompt } from './prompts';
 import { extractTag } from './xml';
 import { sanitizeForPowerShell } from '../../utils/commandSanitizer';
+import { buildSwarmRepairArtifact, persistSwarmRepairArtifact } from './repair';
 
 const MAX_STEP_RETRIES = 3;
 const MAX_STEPS = 12;
@@ -191,6 +192,28 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
 
         const previousResults: string[] = [];
 
+        const persistRepairArtifact = async (
+            status: 'failed' | 'partial',
+            verification: VerificationSnapshot & { evidence?: string | null },
+        ) => {
+            const artifact = buildSwarmRepairArtifact({
+                runId: planRunId,
+                mission: userMission,
+                criteria,
+                status,
+                verification: {
+                    criteriaMet: verification.criteriaMet ?? null,
+                    score: verification.score ?? null,
+                    remaining: verification.remaining ?? null,
+                    evidence: verification.evidence ?? null,
+                },
+                previousResults,
+                planSteps: executionSteps,
+            });
+            await persistSwarmRepairArtifact(projectPath, artifact);
+            window.vibe.log(`[REPAIR] Generated ${artifact.id}`);
+        };
+
         if (projectPath && termId) {
             await window.vibe.clearTerminalOutput(termId);
             window.vibe.sendTerminalInput(termId, `cd "${projectPath}"\r`);
@@ -373,6 +396,12 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                     score: '0',
                     remaining: `Step ${step.id} failed after retries.`,
                 });
+                await persistRepairArtifact('failed', {
+                    criteriaMet: 'no',
+                    score: '0',
+                    remaining: `Step ${step.id} failed after retries.`,
+                    evidence: previousResults[previousResults.length - 1] || null,
+                });
                 useOllamaStore.getState().setIsGenerating(false);
                 useOllamaStore.getState().setAgentStep(0, 0);
                 useOllamaStore.getState().setAgentStatus('');
@@ -435,6 +464,15 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                 content:
                     `⚠ Mission partially complete. Still needed:\n${remaining}\n\n` +
                     'Reply to continue or adjust the approach.',
+            });
+        }
+
+        if (criteriaMet !== 'yes') {
+            await persistRepairArtifact(criteriaMet === 'partial' ? 'partial' : 'failed', {
+                criteriaMet,
+                score: verifyScore,
+                remaining: remaining || null,
+                evidence: extractTag(verifierResponse, 'evidence') || null,
             });
         }
 
