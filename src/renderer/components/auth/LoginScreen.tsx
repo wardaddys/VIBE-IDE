@@ -41,7 +41,7 @@ export function LoginScreen({ onLogin }: Props) {
                                 <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 001.83 5.42L4.5 7.49a4.77 4.77 0 014.48-3.31z"/>
                             </svg>
                         )}
-                        {loading ? 'Signing in…' : 'Continue with Google'}
+                        {loading ? 'Signing in...' : 'Continue with Google'}
                     </button>
 
                     <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-faint)' }}>
@@ -50,7 +50,7 @@ export function LoginScreen({ onLogin }: Props) {
                 </div>
 
                 <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', borderTop: '1px solid var(--border-light)', paddingTop: 16, width: '100%' }}>
-                    VIBE v0.1.0 · Made by Muhammad Saeed
+                    VIBE v0.1.0  Made by Muhammad Saeed
                 </div>
             </GlassPanel>
         </div>

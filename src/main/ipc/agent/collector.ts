@@ -30,7 +30,7 @@ interface HealthState {
   eventCount: number
 }
 
-// Status broadcast — renderer reads this for the neural widget
+// Status broadcast - renderer reads this for the neural widget
 export interface CollectorStatus {
   isRunning: boolean
   eventCount: number
@@ -257,7 +257,7 @@ export class CollectorAgent {
     try {
       const { obsidianUpsert } = await import('../obsidian')
       const projectName = path.basename(this.projectPath || '')
-      const overview = `# ${projectName} — Project Overview
+      const overview = `# ${projectName} - Project Overview
 Updated: ${new Date().toLocaleString()}
 
 ## Health

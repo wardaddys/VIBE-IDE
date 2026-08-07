@@ -61,19 +61,19 @@ export function HuggingFacePicker({ onClose }: Props) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                         <div>
                             <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>
-                                🤗 HuggingFace Models
+                                 HuggingFace Models
                             </div>
                             <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                                Live search — add models to your selector
+                                Live search - add models to your selector
                             </div>
                         </div>
-                        <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text-muted)' }}>✕</button>
+                        <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text-muted)' }}></button>
                     </div>
                     <div style={{ position: 'relative' }}>
                         <input
                             value={search}
                             onChange={e => setSearch(e.target.value)}
-                            placeholder="Search models (e.g. mistral, llama, coder…)"
+                            placeholder="Search models (e.g. mistral, llama, coder...)"
                             autoFocus
                             style={{
                                 width: '100%',
@@ -94,14 +94,14 @@ export function HuggingFacePicker({ onClose }: Props) {
                             }} />
                         )}
                     </div>
-                    {error && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--error)' }}>⚠ {error}</div>}
+                    {error && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--error)' }}>! {error}</div>}
                 </div>
 
                 {/* Results */}
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {results.length === 0 && !loading && (
                         <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                            {error ? 'Search failed — check your connection' : 'No models found'}
+                            {error ? 'Search failed - check your connection' : 'No models found'}
                         </div>
                     )}
                     {results.map(model => {
@@ -122,10 +122,10 @@ export function HuggingFacePicker({ onClose }: Props) {
                                     </div>
                                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                                         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                            ❤ {(model.likes || 0).toLocaleString()}
+                                             {(model.likes || 0).toLocaleString()}
                                         </span>
                                         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                            ↓ {(model.downloads || 0).toLocaleString()}
+                                            v {(model.downloads || 0).toLocaleString()}
                                         </span>
                                         {model.pipeline_tag && (
                                             <span style={{
@@ -175,7 +175,7 @@ export function HuggingFacePicker({ onClose }: Props) {
                 }}>
                     <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                         {pinnedModels.length} model{pinnedModels.length !== 1 ? 's' : ''} added
-                        {!apiKeys?.hf && ' · Add HF token in Settings for more results'}
+                        {!apiKeys?.hf && '  Add HF token in Settings for more results'}
                     </span>
                     <button
                         onClick={onClose}

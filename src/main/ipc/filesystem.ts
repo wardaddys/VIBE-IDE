@@ -1,20 +1,20 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import fs from 'node:fs/promises';
+import fsn from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { canonicalize, isWithin } from '../agent/fsGuard';
 import type { FileEntry } from '../../shared/types';
 
 const IGNORED_DIRS = new Set([
-    'node_modules', '.git', '.DS_Store', '__pycache__', '.venv', 'dist', 'build', '.next', '.cache', '.turbo'
+    'node_modules', '.git', '.DS_Store', '__pycache__', '.venv', 'dist', 'build', '.next', '.cache', '.turbo',
+    'resources', '.claude'
 ]);
 
+/** Maximum watch depth for the bounded recursive watcher. */
+const WATCH_MAX_DEPTH = 3;
+
 let currentProjectRoot: string | null = null;
-
-const normalizeFsPath = (p: string): string => path.resolve(p);
-
-const isWithinRoot = (candidate: string, root: string): boolean => {
-    const rel = path.relative(root, candidate);
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-};
 
 const ensureProjectRoot = () => {
     if (!currentProjectRoot) {
@@ -23,31 +23,90 @@ const ensureProjectRoot = () => {
     return currentProjectRoot;
 };
 
+/**
+ * Canonicalize (expand ~, resolve .., and realpath symlinks) then confine to the
+ * project root. Routing through the shared fsGuard closes the symlink-escape the
+ * old lexical path.relative check allowed (a symlink inside root pointing at
+ * /etc/passwd passed containment and fs would follow it).
+ */
 const resolveAllowedPath = (inputPath: string): string => {
     const root = ensureProjectRoot();
-    const resolved = normalizeFsPath(inputPath);
-    if (!isWithinRoot(resolved, root)) {
+    const resolved = canonicalize(inputPath, root);
+    if (!isWithin(resolved, canonicalize(root, null))) {
         throw new Error(`Access denied outside project root: ${inputPath}`);
     }
     return resolved;
 };
 
 export function registerFileSystemHandlers(mainWindow: BrowserWindow) {
+    const isRoot = process.platform === 'linux' && typeof process.getuid === 'function' && process.getuid() === 0;
+
+    // ── Native folder dialog ───────────────────────────────────────────────
+    // Tries the OS file picker first when running as a normal user. When the
+    // app is launched with sudo the dialog opens as root and starts in /root,
+    // which makes it hard/impossible to select user project folders. In that
+    // case return null so the renderer falls back to the in-app picker, which
+    // starts in the real user's home and navigates via fs.readdir.
     ipcMain.handle('fs:openFolder', async () => {
-        const result = await dialog.showOpenDialog(mainWindow, {
-            properties: ['openDirectory']
-        });
-        if (result.canceled || result.filePaths.length === 0) {
+        if (isRoot) {
             return null;
         }
-        currentProjectRoot = normalizeFsPath(result.filePaths[0]);
+        try {
+            const result = await dialog.showOpenDialog(mainWindow, {
+                properties: ['openDirectory']
+            });
+            if (result.canceled || result.filePaths.length === 0) {
+                return null;
+            }
+            currentProjectRoot = canonicalize(result.filePaths[0], null);
+            return currentProjectRoot;
+        } catch (e) {
+            console.error('Native folder dialog failed:', e);
+            return null;
+        }
+    });
+
+    // ── In-app folder picker (no OS dialog) ─────────────────────────────
+    // Fallback for sudo / headless / broken portal situations. Pure fs.readdir
+    // in the main process; works as root or user, no DBus/portal needed.
+    const pickerHome = (): string => {
+        const u = process.env.SUDO_USER;
+        return u && u !== 'root' ? `/home/${u}` : os.homedir();
+    };
+    ipcMain.handle('fs:listDirs', async (_e, dirPath?: string): Promise<{ path: string; parent: string | null; dirs: { name: string; path: string }[] }> => {
+        let target = dirPath && String(dirPath).trim() ? String(dirPath) : pickerHome();
+        try { target = canonicalize(target, null); } catch { target = pickerHome(); }
+        let entries: any[] = [];
+        try { entries = await fs.readdir(target, { withFileTypes: true }); }
+        catch { target = pickerHome(); try { entries = await fs.readdir(target, { withFileTypes: true }); } catch { entries = []; } }
+        const dirs = entries
+            .filter((e) => { try { return e.isDirectory() && e.name !== 'node_modules'; } catch { return false; } })
+            .map((e) => ({ name: e.name, path: path.join(target, e.name) }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        const parent = path.dirname(target);
+        return { path: target, parent: parent === target ? null : parent, dirs };
+    });
+    ipcMain.handle('fs:makeDir', async (_e, parent: string, name: string): Promise<string> => {
+        const safeName = String(name || '').replace(/[/\\]/g, '').trim();
+        if (!safeName) throw new Error('Invalid folder name.');
+        const target = path.join(canonicalize(parent, null), safeName);
+        await fs.mkdir(target, { recursive: true });
+        return target;
+    });
+    ipcMain.handle('fs:setProjectFolder', async (_e, dirPath: string): Promise<string> => {
+        const resolved = canonicalize(dirPath, null);
+        const st = await fs.stat(resolved).catch(() => null);
+        if (!st || !st.isDirectory()) throw new Error(`Not a directory: ${dirPath}`);
+        currentProjectRoot = resolved;
         return currentProjectRoot;
     });
 
     ipcMain.handle('fs:readDir', async (_event, dirPath: string): Promise<FileEntry[]> => {
         try {
+            // SECURITY: Never auto-adopt an arbitrary path as the project root.
+            // Only fs:openFolder (which uses the native dialog) may set the root.
             if (!currentProjectRoot) {
-                currentProjectRoot = normalizeFsPath(dirPath);
+                return [];
             }
             const safeDirPath = resolveAllowedPath(dirPath);
             const entries = await fs.readdir(safeDirPath, { withFileTypes: true });
@@ -76,11 +135,12 @@ export function registerFileSystemHandlers(mainWindow: BrowserWindow) {
 
     ipcMain.handle('fs:readFile', async (_event, filePath: string): Promise<string> => {
         try {
+            if (!currentProjectRoot) return '';
             const safePath = resolveAllowedPath(filePath);
             return await fs.readFile(safePath, 'utf-8');
         } catch (error) {
             console.error('Failed to read file:', error);
-            throw error;
+            return '';
         }
     });
 
@@ -96,24 +156,66 @@ export function registerFileSystemHandlers(mainWindow: BrowserWindow) {
         }
     });
 
-    let currentWatcher: any = null;
-    ipcMain.handle('fs:watchFolder', (_event, dirPath: string) => {
-        if (currentWatcher) currentWatcher.close();
-        try {
-            const safeDirPath = normalizeFsPath(dirPath);
-            if (currentProjectRoot && !isWithinRoot(safeDirPath, currentProjectRoot)) {
-                throw new Error(`Watch path outside project root: ${dirPath}`);
-            }
-            currentProjectRoot = safeDirPath;
+    /**
+     * Bounded recursive file watcher.
+     *
+     * Node's fs.watch({ recursive: true }) on Linux uses inotify and exhausts the
+     * system watcher limit on large project trees (tens of thousands of files).
+     * We instead create non-recursive watchers only for
+     * directories within WATCH_MAX_DEPTH levels of the project root, skipping
+     * ignored directories. If setting up any watcher fails (ENOSPC etc.) we
+     * swallow the error and continue - the file tree still refreshes manually.
+     */
+    let currentWatchers: fsn.FSWatcher[] = [];
+    const clearWatchers = () => {
+        for (const w of currentWatchers) { try { w.close(); } catch {} }
+        currentWatchers = [];
+    };
+    const notifyChange = () => {
+        if (!mainWindow.isDestroyed()) mainWindow.webContents.send('fs:changed');
+    };
+    const shouldWatchDir = (name: string) => !IGNORED_DIRS.has(name);
 
-            currentWatcher = require('node:fs').watch(safeDirPath, { recursive: true }, (_eventType: string, filename: string) => {
-                if (filename && !IGNORED_DIRS.has(filename.split(/[\/\\]/)[0])) {
-                    if (!mainWindow.isDestroyed()) {
-                        mainWindow.webContents.send('fs:changed');
-                    }
+    ipcMain.handle('fs:watchFolder', async (_event, dirPath: string) => {
+        clearWatchers();
+        if (!currentProjectRoot) return;
+        try {
+            const safeDirPath = resolveAllowedPath(dirPath);
+
+            // macOS/Windows support efficient native recursive watchers with far
+            // higher limits; keep the native behaviour there for instant updates.
+            if (process.platform === 'win32' || process.platform === 'darwin') {
+                currentWatchers.push(fsn.watch(safeDirPath, { recursive: true }, () => notifyChange()));
+                return;
+            }
+
+            const addWatcher = (target: string) => {
+                try {
+                    const w = fsn.watch(target, () => notifyChange());
+                    currentWatchers.push(w);
+                } catch (e) {
+                    // ENOSPC or permission denied on a single directory - keep
+                    // going so the rest of the tree is still watched.
+                    console.warn(`[watch] skipping ${target}:`, e);
                 }
-            });
-        } catch(e) {
+            };
+
+            addWatcher(safeDirPath);
+
+            const walk = async (dir: string, depth: number) => {
+                if (depth <= 0) return;
+                let entries: any[] = [];
+                try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+                for (const entry of entries) {
+                    if (!entry.isDirectory() || !shouldWatchDir(entry.name)) continue;
+                    const child = path.join(dir, entry.name);
+                    addWatcher(child);
+                    await walk(child, depth - 1);
+                }
+            };
+
+            await walk(safeDirPath, WATCH_MAX_DEPTH);
+        } catch (e) {
             console.error('Failed to watch folder:', e);
         }
     });

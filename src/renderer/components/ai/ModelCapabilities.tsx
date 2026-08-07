@@ -54,7 +54,7 @@ export const ModelCapabilities = () => {
                             transition: 'all 0.15s',
                         }}
                     >
-                        💡
+                        
                         {caps.thinkBudget === 'tiered' && thinkEnabled && (
                             <span style={{
                                 textTransform: 'uppercase',
@@ -68,7 +68,7 @@ export const ModelCapabilities = () => {
                         )}
                     </button>
 
-                    {/* Level picker — tiered models only */}
+                    {/* Level picker - tiered models only */}
                     {caps.thinkBudget === 'tiered' && showLevels && (
                         <>
                             <div
@@ -157,7 +157,7 @@ export const ModelCapabilities = () => {
                 </div>
             )}
 
-            {/* VISION BADGE — shows when model supports images */}
+            {/* VISION BADGE - shows when model supports images */}
             {caps.vision && (
                 <div
                     title="This model can see images"
@@ -175,11 +175,11 @@ export const ModelCapabilities = () => {
                         cursor: 'default',
                     }}
                 >
-                    👁 Vision
+                     Vision
                 </div>
             )}
 
-            {/* TOOLS BADGE — shows when model supports function calling */}
+            {/* TOOLS BADGE - shows when model supports function calling */}
             {caps.tools && (
                 <div
                     title="This model supports tool calling"
@@ -197,7 +197,7 @@ export const ModelCapabilities = () => {
                         cursor: 'default',
                     }}
                 >
-                    🔧 Tools
+                     Tools
                 </div>
             )}
 

@@ -10,6 +10,8 @@ export interface ProjectMemory {
 }
 
 export type ChatMode = 'auto' | 'chat' | 'agent';
+/** chat = conversation front and center; ide = editor+terminal center, chat docked right. */
+export type LayoutMode = 'chat' | 'ide';
 
 interface UIState {
     sidebarWidth: number;
@@ -20,6 +22,8 @@ interface UIState {
     vibeInstructions: string | null;
     projectMemory: ProjectMemory | null;
     chatMode: ChatMode;
+    layoutMode: LayoutMode;
+    setLayoutMode: (mode: LayoutMode) => void;
     setSidebarWidth: (width: number) => void;
     setTerminalHeight: (height: number) => void;
     setShowModelPicker: (show: boolean) => void;
@@ -30,6 +34,15 @@ interface UIState {
     setChatMode: (mode: ChatMode) => void;
     isLoggedIn: boolean;
     setIsLoggedIn: (v: boolean) => void;
+    /** Workspace (editor+terminal) panel visibility in chat layout. Lives in the
+        store so the agent delta handler can auto-open it on file touches. */
+    workspaceOpen: boolean;
+    setWorkspaceOpen: (open: boolean) => void;
+    toggleWorkspaceOpen: () => void;
+    /** Dual-model debate mode — replaces chat surface with DebatePanel. */
+    debateMode: boolean;
+    setDebateMode: (v: boolean) => void;
+    toggleDebateMode: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -42,6 +55,8 @@ export const useUIStore = create<UIState>()(
             vibeInstructions: null,
             projectMemory: null,
             chatMode: 'auto',
+            layoutMode: 'chat',
+            setLayoutMode: (layoutMode) => set({ layoutMode }),
             ollamaConnected: false,
             setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
             setTerminalHeight: (terminalHeight) => set({ terminalHeight }),
@@ -52,7 +67,13 @@ export const useUIStore = create<UIState>()(
             setProjectMemory: (projectMemory) => set({ projectMemory }),
             setChatMode: (chatMode) => set({ chatMode }),
             isLoggedIn: false,
-            setIsLoggedIn: (isLoggedIn) => set({ isLoggedIn })
+            setIsLoggedIn: (isLoggedIn) => set({ isLoggedIn }),
+            workspaceOpen: false,
+            setWorkspaceOpen: (workspaceOpen) => set({ workspaceOpen }),
+            toggleWorkspaceOpen: () => set((s) => ({ workspaceOpen: !s.workspaceOpen })),
+            debateMode: false,
+            setDebateMode: (debateMode) => set({ debateMode }),
+            toggleDebateMode: () => set((s) => ({ debateMode: !s.debateMode })),
         }),
         { 
             name: 'vibe-ui-storage', 

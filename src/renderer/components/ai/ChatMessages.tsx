@@ -5,9 +5,9 @@ import { useEditorStore } from '../../store/editor';
 import { ThinkBlock } from './ThinkBlock';
 import { ThinkingIndicator } from './ThinkingIndicator';
 
-/* ═══════════════════════════════════════════════════════════
+/* ===========================================================
    XML TAG EXTRACTION HELPER
-   ═══════════════════════════════════════════════════════════ */
+   =========================================================== */
 function extractTag(text: string, tag: string): string | null {
     try {
         const match = text.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
@@ -15,18 +15,18 @@ function extractTag(text: string, tag: string): string | null {
     } catch { return null; }
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ===========================================================
    SEGMENT TYPES
-   ═══════════════════════════════════════════════════════════ */
+   =========================================================== */
 interface Segment {
     type: 'text' | 'plan' | 'critique' | 'reflection' | 'verification' | 'done' | 'analyze' | 'execute' | 'write_file';
     content: string;
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ===========================================================
    XML RESPONSE PARSER
    Splits response into typed segments. Strips unrecognized tags.
-   ═══════════════════════════════════════════════════════════ */
+   =========================================================== */
 function parseAgentResponse(content: string): Segment[] {
     const segments: Segment[] = [];
 
@@ -62,7 +62,7 @@ function parseAgentResponse(content: string): Segment[] {
         } else if (block.startsWith('<write_file')) {
             segments.push({ type: 'write_file', content: block });
         }
-        // read_file is silently stripped — no segment added
+        // read_file is silently stripped - no segment added
 
         lastIndex = match.index + match[0].length;
     }
@@ -84,11 +84,11 @@ function stripUnknownTags(text: string): string {
         .trim();
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ===========================================================
    BEAUTIFUL UI COMPONENTS FOR AGENT PHASES
-   ═══════════════════════════════════════════════════════════ */
+   =========================================================== */
 
-/* ─── EXECUTION PLAN ─────────────────────────────────────── */
+/* --- EXECUTION PLAN --------------------------------------- */
 function PlanCard({ content }: { content: string }) {
     const [collapsed, setCollapsed] = useState(false);
     const mission = extractTag(content, 'mission') || '';
@@ -103,9 +103,9 @@ function PlanCard({ content }: { content: string }) {
     return (
         <div className="agent-card agent-card--plan">
             <div className="agent-card__header" onClick={() => setCollapsed(!collapsed)}>
-                <span className="agent-card__icon">🎯</span>
+                <span className="agent-card__icon"></span>
                 <span className="agent-card__title">Execution Plan</span>
-                <span className="agent-card__toggle">{collapsed ? '▸' : '▾'}</span>
+                <span className="agent-card__toggle">{collapsed ? '' : ''}</span>
             </div>
             {!collapsed && (
                 <div className="agent-card__body">
@@ -115,7 +115,7 @@ function PlanCard({ content }: { content: string }) {
                             {steps.map((s, i) => (
                                 <div key={i} className="agent-plan__step">
                                     <span className="agent-plan__step-num">
-                                        {['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'][i] || `${i+1}.`}
+                                        {['','','','','','','','','',''][i] || `${i+1}.`}
                                     </span>
                                     <span>{s}</span>
                                 </div>
@@ -129,7 +129,7 @@ function PlanCard({ content }: { content: string }) {
                     )}
                     {risks && (
                         <div className="agent-plan__risks">
-                            <span className="agent-plan__risks-label">⚠ Risks:</span> {risks}
+                            <span className="agent-plan__risks-label">! Risks:</span> {risks}
                         </div>
                     )}
                 </div>
@@ -138,7 +138,7 @@ function PlanCard({ content }: { content: string }) {
     );
 }
 
-/* ─── CRITIQUE / PLAN REVIEW ─────────────────────────────── */
+/* --- CRITIQUE / PLAN REVIEW ------------------------------- */
 function CritiqueCard({ content }: { content: string }) {
     const scoreStr = extractTag(content, 'score') || '8';
     const score = parseInt(scoreStr, 10);
@@ -149,18 +149,18 @@ function CritiqueCard({ content }: { content: string }) {
     return (
         <div className={`agent-card agent-card--critique agent-card--critique-${variant}`}>
             <div className="agent-card__header">
-                <span className="agent-card__icon">{approved ? '✓' : '↻'}</span>
+                <span className="agent-card__icon">{approved ? 'ok' : ''}</span>
                 <span className="agent-card__title">Plan Review</span>
                 <span className="agent-critique__score">Score: {score}/10</span>
             </div>
             <div className="agent-critique__status">
-                {approved ? 'Approved' : 'Issues found — revising plan…'}
+                {approved ? 'Approved' : 'Issues found - revising plan...'}
             </div>
         </div>
     );
 }
 
-/* ─── REFLECTION PILL ────────────────────────────────────── */
+/* --- REFLECTION PILL -------------------------------------- */
 function ReflectionPill({ content }: { content: string }) {
     const scoreStr = extractTag(content, 'score') || '8';
     const score = parseInt(scoreStr, 10);
@@ -169,20 +169,20 @@ function ReflectionPill({ content }: { content: string }) {
 
     return (
         <span className={`agent-pill agent-pill--${good ? 'good' : 'retry'}`}>
-            Score {score}/10 {good ? '✓' : '↻'} {proceed === 'no' ? 'Retrying' : 'Proceeding'}
+            Score {score}/10 {good ? 'ok' : ''} {proceed === 'no' ? 'Retrying' : 'Proceeding'}
         </span>
     );
 }
 
-/* ─── VERIFICATION CARD ──────────────────────────────────── */
+/* --- VERIFICATION CARD ------------------------------------ */
 function VerificationCard({ content }: { content: string }) {
     const criteriaMet = extractTag(content, 'criteria_met') || 'unknown';
     const remaining = extractTag(content, 'remaining') || '';
     const evidence = extractTag(content, 'evidence') || '';
 
-    let icon = '✅'; let title = 'Mission Complete'; let variant = 'complete';
-    if (criteriaMet === 'no') { icon = '⚠'; title = 'Incomplete'; variant = 'incomplete'; }
-    if (criteriaMet === 'partial') { icon = '🔄'; title = 'Partially Complete'; variant = 'partial'; }
+    let icon = ''; let title = 'Mission Complete'; let variant = 'complete';
+    if (criteriaMet === 'no') { icon = '!'; title = 'Incomplete'; variant = 'incomplete'; }
+    if (criteriaMet === 'partial') { icon = ''; title = 'Partially Complete'; variant = 'partial'; }
 
     return (
         <div className={`agent-card agent-card--verification agent-card--verification-${variant}`}>
@@ -196,7 +196,7 @@ function VerificationCard({ content }: { content: string }) {
                     <div className="agent-verification__remaining">
                         <div className="agent-verification__remaining-title">Still needed:</div>
                         {remaining.split('\n').filter(Boolean).map((item, i) => (
-                            <div key={i} className="agent-verification__remaining-item">• {item.replace(/^[-•]\s*/, '')}</div>
+                            <div key={i} className="agent-verification__remaining-item"> {item.replace(/^[-]\s*/, '')}</div>
                         ))}
                     </div>
                 )}
@@ -205,7 +205,7 @@ function VerificationCard({ content }: { content: string }) {
     );
 }
 
-/* ─── DONE CARD ──────────────────────────────────────────── */
+/* --- DONE CARD -------------------------------------------- */
 function DoneCard({ content }: { content: string }) {
     const summary = extractTag(content, 'summary') || 'Task completed';
     const filesChanged = extractTag(content, 'files_changed') || '';
@@ -213,7 +213,7 @@ function DoneCard({ content }: { content: string }) {
     return (
         <div className="agent-card agent-card--done">
             <div className="agent-card__header">
-                <span className="agent-card__icon">✅</span>
+                <span className="agent-card__icon"></span>
                 <span className="agent-card__title">Task Complete</span>
             </div>
             <div className="agent-card__body">
@@ -226,13 +226,13 @@ function DoneCard({ content }: { content: string }) {
     );
 }
 
-/* ─── ANALYSIS CARD ──────────────────────────────────────── */
+/* --- ANALYSIS CARD ---------------------------------------- */
 function AnalyzeCard({ content }: { content: string }) {
     const inner = extractTag(content, 'analyze') || content.replace(/<\/?analyze>/gi, '').trim();
     return (
         <div className="agent-card agent-card--analyze">
             <div className="agent-card__header">
-                <span className="agent-card__icon">💭</span>
+                <span className="agent-card__icon"></span>
                 <span className="agent-card__title">Analysis</span>
             </div>
             <div className="agent-card__body">
@@ -242,7 +242,7 @@ function AnalyzeCard({ content }: { content: string }) {
     );
 }
 
-/* ─── COMMAND BLOCK ──────────────────────────────────────── */
+/* --- COMMAND BLOCK ---------------------------------------- */
 function CommandBlock({ command }: { command: string }) {
     const handleCopy = () => navigator.clipboard.writeText(command);
     return (
@@ -258,7 +258,7 @@ function CommandBlock({ command }: { command: string }) {
     );
 }
 
-/* ─── FILE WRITE BLOCK ───────────────────────────────────── */
+/* --- FILE WRITE BLOCK ------------------------------------- */
 function FileWriteBlock({ path, content }: { path: string, content: string }) {
     const projectPath = useUIStore(state => state.projectPath);
     const openFile = useEditorStore(state => state.openFile);
@@ -280,16 +280,16 @@ function FileWriteBlock({ path, content }: { path: string, content: string }) {
             <div className="agent-file-write__info">
                 <span className="agent-file-write__path">{path}</span>
                 <span className={`agent-file-write__status ${written ? 'agent-file-write__status--done' : ''}`}>
-                    {written ? 'SAVED' : 'SAVING…'}
+                    {written ? 'SAVED' : 'SAVING...'}
                 </span>
             </div>
         </div>
     );
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ===========================================================
    MAIN CHAT MESSAGES COMPONENT
-   ═══════════════════════════════════════════════════════════ */
+   =========================================================== */
 export function ChatMessages() {
     const messages = useOllamaStore(state => state.messages);
     const isGenerating = useOllamaStore(state => state.isGenerating);
@@ -300,9 +300,9 @@ export function ChatMessages() {
     }, [messages, isGenerating]);
 
     const renderContent = (content: string) => {
-        if (!content) return <span className="chat-empty">…</span>;
+        if (!content) return <span className="chat-empty">...</span>;
 
-        // ── Special prefix-based blocks (unchanged) ──
+        // -- Special prefix-based blocks (unchanged) --
         if (content.startsWith('__TERMINAL_OUTPUT__\n')) {
             const output = content.replace('__TERMINAL_OUTPUT__\n', '');
             return (
@@ -319,8 +319,8 @@ export function ChatMessages() {
             const body = content.slice(firstNewline + 1);
             return (
                 <div className="chat-file-contents">
-                    <div className="chat-file-contents__label">📄 Reading: {header}</div>
-                    {body.slice(0, 600)}{body.length > 600 ? '\n… (truncated for display)' : ''}
+                    <div className="chat-file-contents__label"> Reading: {header}</div>
+                    {body.slice(0, 600)}{body.length > 600 ? '\n... (truncated for display)' : ''}
                 </div>
             );
         }
@@ -330,7 +330,7 @@ export function ChatMessages() {
             return <div className="chat-swarm-label">{label}</div>;
         }
 
-        // ── Parse agent XML blocks ──
+        // -- Parse agent XML blocks --
         const segments = parseAgentResponse(content);
 
         // If parser found nothing special, render as plain text

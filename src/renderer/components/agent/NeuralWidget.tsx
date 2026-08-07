@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { useUIStore } from '../../store/ui'
 
 interface AgentStatus {
   collector: {
@@ -23,6 +24,10 @@ export function NeuralWidget() {
   const statusRef = useRef<AgentStatus | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [status, setStatus] = useState<AgentStatus | null>(null)
+  const projectPath = useUIStore(state => state.projectPath);
+  const [facts, setFacts] = useState<string[]>([]);
+  const [health, setHealth] = useState<any>(null);
+  const [repair, setRepair] = useState<any>(null);
 
   // Poll agent status every 2 seconds
   useEffect(() => {
@@ -39,6 +44,27 @@ export function NeuralWidget() {
   }, [])
 
   // Canvas animation
+
+  // Load facts, health, and repair suggestions when expanded
+  useEffect(() => {
+    if (!expanded || !projectPath) return;
+    const load = async () => {
+      try {
+        const factsContent = await window.vibe.readFile(`${projectPath}/.vibe/facts.json`);
+        const parsed = JSON.parse(factsContent);
+        if (Array.isArray(parsed.facts)) setFacts(parsed.facts.slice(-5));
+      } catch {}
+      try {
+        const healthContent = await window.vibe.readFile(`${projectPath}/.vibe/health.json`);
+        setHealth(JSON.parse(healthContent));
+      } catch {}
+      try {
+        const repairContent = await window.vibe.readFile(`${projectPath}/.vibe/swarm-repairs/latest.json`);
+        setRepair(JSON.parse(repairContent));
+      } catch {}
+    };
+    load();
+  }, [expanded, projectPath]);
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -269,7 +295,7 @@ export function NeuralWidget() {
   }, [])
 
   const formatTime = (ms: number | null) => {
-    if (!ms) return '—'
+    if (!ms) return '-'
     const s = Math.floor((Date.now() - ms) / 1000)
     if (s < 60) return `${s}s ago`
     return `${Math.floor(s/60)}m ago`
@@ -305,20 +331,49 @@ export function NeuralWidget() {
           </div>
           <div style={{ borderBottom: '1px solid rgba(60,120,255,0.15)', paddingBottom: 8, marginBottom: 8 }}>
             <div style={{ color: 'rgba(100,180,255,0.9)', fontWeight: 600, marginBottom: 2 }}>
-              ◆ Collector
+               Collector
             </div>
             <div>events: {status.collector.eventCount}</div>
             <div>last event: {formatTime(status.collector.lastEventTime)}</div>
-            <div>distilling: {status.collector.isDistilling ? '⚡ active' : 'idle'}</div>
+            <div>distilling: {status.collector.isDistilling ? ' active' : 'idle'}</div>
           </div>
           <div>
             <div style={{ color: 'rgba(80,220,160,0.9)', fontWeight: 600, marginBottom: 2 }}>
-              ◆ Reviewer
+               Reviewer
             </div>
             <div>briefings: {status.reviewer.briefingCount}</div>
             <div>last briefing: {formatTime(status.reviewer.lastBriefingTime || null)}</div>
-            <div>synthesizing: {status.reviewer.isSynthesizing ? '⚡ active' : 'idle'}</div>
+            <div>synthesizing: {status.reviewer.isSynthesizing ? ' active' : 'idle'}</div>
           </div>
+          {/* Facts */}
+          {facts.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 600, color: 'rgba(180,210,255,0.9)', marginBottom: 4 }}>Facts</div>
+              <ul style={{ paddingLeft: 16, margin: 0 }}>
+                {facts.slice(0, 5).map((f, i) => <li key={i} style={{ fontSize: 11 }}>{f}</li>)}
+              </ul>
+            </div>
+          )}
+          {/* Health */}
+          {health && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 600, color: 'rgba(180,210,255,0.9)', marginBottom: 4 }}>Health</div>
+              <div>Branch: {health.git?.branch}</div>
+              <div>Uncommitted: {health.git?.uncommittedChanges}</div>
+              <div>Recent: {Array.isArray(health.recentChanges) ? health.recentChanges.slice(-3).join(', ') : ''}</div>
+            </div>
+          )}
+          {/* Repair Suggestions */}
+          {repair && repair.suggestedChanges && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 600, color: 'rgba(180,210,255,0.9)', marginBottom: 4 }}>Repair Suggestions</div>
+              <ul style={{ paddingLeft: 16, margin: 0 }}>
+                {repair.suggestedChanges.map((chg: any, i: number) => (
+                  <li key={i} style={{ fontSize: 11 }}>{chg.message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
       <div

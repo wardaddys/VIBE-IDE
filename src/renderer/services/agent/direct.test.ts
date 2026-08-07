@@ -5,7 +5,7 @@ describe('direct service', () => {
     it('builds grounded direct-chat prompt with project rules and briefing', () => {
         const prompt = buildDirectSystemPrompt(
             'Always run tests before final response.',
-            '\nPROJECT BRIEFING (from background intelligence):\nCore flow is in ChatBar\n',
+            '\nPROJECT BRIEFING (from background intelligence):\nCore flow is in AgentSurface\n',
         );
 
         expect(prompt).toContain('You are VIBE Chat Assistant running inside the VIBE IDE desktop app.');

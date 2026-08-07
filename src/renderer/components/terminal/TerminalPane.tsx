@@ -7,6 +7,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 
 import { useTerminalStore } from '../../store/terminal';
+import { terminalBus } from '../../utils/terminalBus';
 
 export function TerminalPane() {
     const terminalHeight = useUIStore(state => state.terminalHeight);
@@ -91,6 +92,21 @@ export function TerminalPane() {
             }
             terminal.dispose();
         };
+    }, []);
+
+    // Mirror the agent's bash activity into this terminal (display only — the
+    // pty above is still the user's real interactive shell). Replays the full
+    // command log on mount so reopening the terminal shows everything the agent
+    // has run, then follows new output and auto-scrolls to the latest.
+    useEffect(() => {
+        const hist = terminalBus.getHistory();
+        if (hist) terminalRef.current?.write(hist);
+        terminalRef.current?.scrollToBottom();
+        const unsub = terminalBus.subscribe((text) => {
+            terminalRef.current?.write(text);
+            terminalRef.current?.scrollToBottom();
+        });
+        return unsub;
     }, []);
 
     return (

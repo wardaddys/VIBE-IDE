@@ -1,4 +1,4 @@
-import { useOllamaStore } from '../../store/ollama';
+﻿import { useOllamaStore } from '../../store/ollama';
 import { useSettingsStore } from '../../store/settings';
 import { useTerminalStore } from '../../store/terminal';
 import { useUIStore } from '../../store/ui';
@@ -45,6 +45,19 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
 
     const projectPath = useUIStore.getState().projectPath;
     const projectMemory = useUIStore.getState().projectMemory;
+    // Load persistent facts (if any) and merge into memory for planning
+    let extendedMemory: any = projectMemory;
+    if (projectPath) {
+        try {
+            const factsContent = await window.vibe.readFile(`${projectPath}/.vibe/facts.json`);
+            const factsJson = JSON.parse(factsContent);
+            if (factsJson.facts) {
+                extendedMemory = { ...(projectMemory ?? {}), facts: factsJson.facts };
+            }
+        } catch {
+            // Ignore if facts file missing or malformed
+        }
+    }
     const termId = useTerminalStore.getState().activeTerminalId;
 
     try {
@@ -60,7 +73,7 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
 
         const briefingContext = await getBriefingContext();
         if (shouldStop()) return;
-        window.vibe.log(`[BRIEFING] ${briefingContext ? 'Loaded ✓' : 'Not available'}`);
+        window.vibe.log(`[BRIEFING] ${briefingContext ? 'Loaded ok' : 'Not available'}`);
 
         const obsidianKey = useSettingsStore.getState().apiKeys.obsidian;
         const projectName = projectPath?.split(/[/\\]/).pop() || 'Unknown';
@@ -82,7 +95,7 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                 userMission,
                 projectPath,
                 projectStructure,
-                projectMemory,
+                extendedMemory,
                 vibeInstructions,
                 briefingContext,
             ),
@@ -285,21 +298,43 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                     }
                 }
 
+                // Match write_file with content: <write_file path="...">content</write_file>
+                const writeMatchFull = stepResponse.match(/<write_file\s+path=['"]([^'"]+)['"]\s*>([\s\S]*?)<\/write_file>/);
                 const writeMatch = stepResponse.match(/<write_file\s+path=['"]([^'"]+)['"]/);
-                if (writeMatch) {
+                if (writeMatchFull || writeMatch) {
                     toolType = 'write_file';
-                    toolResult = `WROTE: ${writeMatch[1]}`;
-                    await new Promise(r => setTimeout(r, 500));
+                    const filePath = (writeMatchFull || writeMatch)![1];
+                    // Prefer content from the full match (with closing tag); fall back to extracting after >
+                    let fileContent: string;
+                    if (writeMatchFull) {
+                        fileContent = writeMatchFull[2].trim();
+                    } else {
+                        // Model emitted opening tag only â€” try to extract content up to next tag or end
+                        const afterTag = stepResponse.slice(stepResponse.indexOf(writeMatch![0]) + writeMatch![0].length);
+                        const nextTagIdx = afterTag.search(/<\/?(?:read_file|execute|done|plan|step|reflection)/);
+                        fileContent = nextTagIdx >= 0 ? afterTag.slice(0, nextTagIdx).trim() : afterTag.trim();
+                    }
+                    try {
+                        await window.vibe.writeFile(filePath, fileContent);
+                        toolResult = `WROTE: ${filePath} (${fileContent.length} chars)`;
+                    } catch (writeErr) {
+                        toolResult = `ERROR writing ${filePath}: ${(writeErr as Error).message}`;
+                    }
                 }
 
                 const executeMatch = stepResponse.match(/<execute>([\s\S]*?)<\/execute>/);
                 if (executeMatch && termId) {
                     toolType = 'execute';
                     const command = executeMatch[1].trim();
-                    const safeCommand = sanitizeForPowerShell(command);
+                    // Only translate to PowerShell on Windows. On Linux/macOS the
+                    // visible terminal is bash/zsh, so translating would corrupt
+                    // valid commands (ls -> dir, && -> ;, grep -> Select-String).
+                    const safeCommand = window.vibe.platform === 'win32'
+                        ? sanitizeForPowerShell(command)
+                        : command;
 
                     if (safeCommand !== command) {
-                        window.vibe.log(`[SANITIZE] Unix→PowerShell: "${command}" → "${safeCommand}"`);
+                        window.vibe.log(`[SANITIZE] Unix->PowerShell: "${command}" -> "${safeCommand}"`);
                     }
 
                     useOllamaStore.getState().setAgentStatus(`Running: ${safeCommand.slice(0, 50)}`);
@@ -388,7 +423,7 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                 useOllamaStore.getState().addMessage({
                     role: 'assistant',
                     content:
-                        `⚠ Step ${step.id} failed after ${MAX_STEP_RETRIES} attempts. ` +
+                        `! Step ${step.id} failed after ${MAX_STEP_RETRIES} attempts. ` +
                         `Last issue: ${previousResults[previousResults.length - 1]}. ` +
                         `Please review and try a more specific instruction.`,
                 });
@@ -460,11 +495,11 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
         window.vibe.log(`[VERIFY] Criteria met: ${criteriaMet} | Score: ${verifyScore}`);
 
         if (criteriaMet === 'no' && remaining) {
-            useOllamaStore.getState().setAgentStatus('Mission incomplete — informing user...');
+            useOllamaStore.getState().setAgentStatus('Mission incomplete - informing user...');
             useOllamaStore.getState().addMessage({
                 role: 'assistant',
                 content:
-                    `⚠ Mission partially complete. Still needed:\n${remaining}\n\n` +
+                    `! Mission partially complete. Still needed:\n${remaining}\n\n` +
                     'Reply to continue or adjust the approach.',
             });
         }

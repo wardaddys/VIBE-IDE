@@ -120,7 +120,7 @@ ${projectStructure.slice(0, 3000)}
     const timestamp = new Date().toISOString()
     const stepList = steps.map((s, i) => `${i + 1}. ${s}`).join('\n')
     const entry = `
-## ${timestamp.slice(0, 16).replace('T', ' ')} — ${mission.slice(0, 80)}
+## ${timestamp.slice(0, 16).replace('T', ' ')} - ${mission.slice(0, 80)}
 
 **Model:** ${model}
 **Result:** ${criteraMet === 'yes' ? 'complete' : criteraMet === 'partial' ? 'partial' : 'incomplete'}
@@ -147,7 +147,7 @@ ${result}
     if (!key) return false
     const date = new Date().toISOString().split('T')[0]
     const entry = `
-## ${date} — ${summary.slice(0, 80)}
+## ${date} - ${summary.slice(0, 80)}
 
 **Files changed:** ${filesChanged || 'none'}
 

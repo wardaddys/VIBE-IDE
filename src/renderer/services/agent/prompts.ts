@@ -6,7 +6,7 @@ export function buildPlannerPrompt(
     vibeInstructions: string | null,
     briefingContext: string = ''
 ): string {
-    return `You are VIBE Planner — an expert software architect.
+    return `You are VIBE Planner - an expert software architect.
 
 Your job is to create a precise, executable plan for this mission:
 "${mission}"
@@ -32,17 +32,17 @@ Output ONLY this XML structure, nothing else:
       Next step description
     </step>
   </steps>
-  <criteria>What "done" looks like — specific and testable</criteria>
+  <criteria>What "done" looks like - specific and testable</criteria>
   <risks>Any risks or things that might go wrong</risks>
 </plan>
 
 RULES:
 - Maximum 8 steps
-- Each step must be atomic — one action only
+- Each step must be atomic - one action only
 - type must be: read_file, execute, write_file, or analyze
 - depends attribute lists step ids this step waits for
-- Be specific — name exact files and commands where known
-- Do NOT include code yet — planning only`;
+- Be specific - name exact files and commands where known
+- Do NOT include code yet - planning only`;
 }
 
 export function buildExecutorPrompt(
@@ -52,7 +52,7 @@ export function buildExecutorPrompt(
     previousResults: string,
     projectPath: string | null
 ): string {
-    return `You are VIBE Executor — an expert developer running on Windows with PowerShell.
+    return `You are VIBE Executor - an expert developer running on Windows with PowerShell.
 
 MISSION: ${mission}
 CURRENT STEP: ${currentStep}
@@ -93,9 +93,9 @@ After using your tool, output your reflection:
 RULES:
 - Use ONLY ONE tool per response
 - Always read a file before editing it
-- PowerShell syntax only — use semicolons not &&
-- Write COMPLETE files — never partial, never placeholder
-- Be honest in reflection — low score = retry with fix
+- PowerShell syntax only - use semicolons not &&
+- Write COMPLETE files - never partial, never placeholder
+- Be honest in reflection - low score = retry with fix
 - If this is the final step and mission is complete, add:
   <done>
     <summary>What was accomplished</summary>

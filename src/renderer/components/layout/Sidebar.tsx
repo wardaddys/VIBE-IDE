@@ -20,7 +20,7 @@ const toolbarBtnStyle: React.CSSProperties = {
 
 export function Sidebar() {
     const sidebarWidth = useUIStore(state => state.sidebarWidth);
-    // Use the UI‑level flag that is updated every 5 s (see App.tsx)
+    // Use the UIlevel flag that is updated every 5s (see App.tsx)
     const ollamaConnected = useUIStore(state => state.ollamaConnected);
     const [showSettings, setShowSettings] = useState(false);
     const projectPath = useUIStore(state => state.projectPath);
@@ -58,10 +58,10 @@ export function Sidebar() {
             <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-light)' }}>
                 <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', fontWeight: 600 }}>Explorer</span>
                 <div style={{ display: 'flex', gap: 2 }}>
-                    <button onClick={() => handleNewFile()} title="New File" style={toolbarBtnStyle}>📄</button>
-                    <button onClick={() => handleNewFolder()} title="New Folder" style={toolbarBtnStyle}>📁</button>
-                    <button onClick={() => handleRefresh()} title="Refresh Explorer" style={toolbarBtnStyle}>🔄</button>
-                    <button onClick={() => handleCollapseAll()} title="Collapse All" style={toolbarBtnStyle}>⊟</button>
+                    <button onClick={() => handleNewFile()} title="New File" style={toolbarBtnStyle}></button>
+                    <button onClick={() => handleNewFolder()} title="New Folder" style={toolbarBtnStyle}></button>
+                    <button onClick={() => handleRefresh()} title="Refresh Explorer" style={toolbarBtnStyle}></button>
+                    <button onClick={() => handleCollapseAll()} title="Collapse All" style={toolbarBtnStyle}></button>
                 </div>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
@@ -72,7 +72,7 @@ export function Sidebar() {
                     <div style={{ width: 8, height: 8, borderRadius: '50%', background: ollamaConnected ? 'var(--green)' : 'var(--error)' }} />
                     <span style={{ color: 'var(--text-secondary)' }}>Ollama {ollamaConnected ? 'Connected' : 'Disconnected'}</span>
                 </div>
-                <button onClick={() => setShowSettings(true)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--text-muted)' }} title="IDE Settings">⚙</button>
+                <button onClick={() => setShowSettings(true)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--text-muted)' }} title="IDE Settings">*</button>
             </div>
             {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
         </GlassPanel>

@@ -2,6 +2,8 @@ import { ipcMain, BrowserWindow } from 'electron';
 import type { ChatMessage } from '../../shared/types';
 import { buildChatRoute } from './modelRouter';
 import { execSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const OLLAMA_API_BASE = 'http://localhost:11434/api';
 let abortController: AbortController | null = null;
@@ -26,7 +28,10 @@ async function ensureOllamaRunning(): Promise<boolean> {
     if (!isBootingOllama) {
         isBootingOllama = true;
         try {
-            const child = spawn('ollama', ['serve'], {
+            // Try the same PATH the renderer process sees; fall back to common locations.
+            const ollamaBin = findOllamaBinary();
+            if (!ollamaBin) return false;
+            const child = spawn(ollamaBin, ['serve'], {
                 detached: true,
                 stdio: 'ignore',
                 windowsHide: true,
@@ -48,11 +53,38 @@ async function ensureOllamaRunning(): Promise<boolean> {
     return false;
 }
 
+function findOllamaBinary(): string | null {
+    const candidates = [
+        process.env.OLLAMA_PATH,
+        'ollama',
+        '/usr/local/bin/ollama',
+        '/usr/bin/ollama',
+        '/opt/ollama/bin/ollama',
+        process.env.HOME ? `${process.env.HOME}/.local/bin/ollama` : null,
+    ].filter(Boolean) as string[];
+    for (const c of candidates) {
+        try {
+            // If it's an absolute path, verify it exists and is executable.
+            if (path.isAbsolute(c)) {
+                fs.accessSync(c, fs.constants.X_OK);
+                return c;
+            }
+            // Otherwise try to resolve via PATH using a tiny exec.
+            execSync(`command -v ${c}`, { encoding: 'utf8', stdio: 'ignore' });
+            return c;
+        } catch { /* try next */ }
+    }
+    return null;
+}
+
 function listModelsFromCli(): string[] {
+    const bin = findOllamaBinary();
+    if (!bin) return [];
     try {
-        const out = execSync('ollama list', {
+        const out = execSync(`${bin} list`, {
             windowsHide: true,
             encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
         }).trim();
 
         if (!out) return [];
@@ -205,16 +237,27 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
         }
     });
 
-    ipcMain.handle('ollama:getCapabilities', async (_event, modelName: string) => {
+    ipcMain.handle('ollama:getCapabilities', async (_event, modelName: string, opts?: { cloud?: boolean; ollamaKey?: string }) => {
         try {
-            await ensureOllamaRunning();
-            const res = await fetch(`${OLLAMA_API_BASE}/show`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: modelName })
-            });
-            if (!res.ok) return null;
-            const data = await res.json();
+            // Ask Ollama's /api/show for the model's authoritative capability list.
+            // Cloud models aren't pulled locally, so query ollama.com (with the key)
+            // for them; fall back to the local daemon otherwise.
+            const showAt = async (base: string, headers: Record<string, string>): Promise<any | null> => {
+                try {
+                    const res = await fetch(`${base}/show`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...headers },
+                        body: JSON.stringify({ model: modelName }),
+                    });
+                    return res.ok ? await res.json() : null;
+                } catch { return null; }
+            };
+            const cloudHdr = opts?.ollamaKey ? { Authorization: `Bearer ${opts.ollamaKey}` } : null;
+            let data: any = null;
+            if (opts?.cloud && cloudHdr) data = await showAt('https://ollama.com/api', cloudHdr);
+            if (!data) { await ensureOllamaRunning().catch(() => {}); data = await showAt(OLLAMA_API_BASE, {}); }
+            if (!data && cloudHdr) data = await showAt('https://ollama.com/api', cloudHdr);
+            if (!data) return null;
 
             const capabilities: string[] = data.capabilities || [];
             const family: string = data.details?.family?.toLowerCase() || '';
@@ -351,7 +394,7 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
                     mainWindow.webContents.send('ollama:stream', { content: '', done: true });
                 }
             } else if (!mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('ollama:stream', { content: `\n\n🚨 **System Error:** ${error.message}`, done: true });
+                mainWindow.webContents.send('ollama:stream', { content: `\n\n **System Error:** ${error.message}`, done: true });
             }
         } finally { abortController = null; }
     });

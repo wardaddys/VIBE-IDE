@@ -32,8 +32,8 @@ export function ThinkingIndicator() {
                 {agentStatus
                     ? agentStatus
                     : isLooping
-                        ? `Agent working… (step ${agentStep}/${agentMaxSteps})`
-                        : 'Agent is thinking…'}
+                        ? `Agent working... (step ${agentStep}/${agentMaxSteps})`
+                        : 'Agent is thinking...'}
             </span>
         </div>
     );

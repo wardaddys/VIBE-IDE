@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useUIStore } from '../../store/ui';
 import { useEditorStore } from '../../store/editor';
 import { useOllamaStore } from '../../store/ollama';
+import { pickFolder } from '../../store/folderPicker';
 
 interface MenuItem {
     label: string;
@@ -35,7 +36,7 @@ export function MenuBar() {
     }, []);
 
     const handleOpenFolder = async () => {
-        const p = await window.vibe.openFolder();
+        const p = await pickFolder();
         if (p) setProjectPath(p);
         setOpenMenu(null);
     };

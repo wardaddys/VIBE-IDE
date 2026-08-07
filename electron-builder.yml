@@ -5,6 +5,11 @@ directories:
 files:
   - dist
   - dist-electron
+asar: true
+# node-pty ships a native .node binary; it must live OUTSIDE the asar archive
+# or the agent bash tool and the terminal silently fail in the packaged app.
+asarUnpack:
+  - "**/node_modules/node-pty/**"
 nodeGypRebuild: false
 npmRebuild: true
 mac:

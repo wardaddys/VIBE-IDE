@@ -46,7 +46,7 @@ export async function runSwarm(swarm: SwarmConfig, userInput: string, deps: RunS
 
             useOllamaStore.getState().addMessage({
                 role: 'user',
-                content: `__SWARM_LABEL__Wave ${wave + 1} — ${waveAgents.map(a => a.role).join(', ')}`,
+                content: `__SWARM_LABEL__Wave ${wave + 1} - ${waveAgents.map(a => a.role).join(', ')}`,
             });
 
             useOllamaStore.getState().setAgentStatus(
@@ -75,7 +75,7 @@ export async function runSwarm(swarm: SwarmConfig, userInput: string, deps: RunS
 
 Original request: ${userInput}
 
-Produce a detailed, numbered execution plan. Be specific about file names, commands, logic, and edge cases. Output only the plan — no code, no implementation.`
+Produce a detailed, numbered execution plan. Be specific about file names, commands, logic, and edge cases. Output only the plan - no code, no implementation.`
                     : `You are the ${agent.role} agent in a multi-agent swarm.
 
 Original request: ${handoff.originalRequest}
@@ -96,7 +96,7 @@ Execute your part of the work using VIBE tools:
                     { role: 'user', content: agent.role === 'Architect' ? userInput : 'Execute your role. Context is in your system prompt.' },
                 ];
 
-                useOllamaStore.getState().addMessage({ role: 'user', content: `__SWARM_LABEL__  ↳ ${agent.role} (${agent.model})` });
+                useOllamaStore.getState().addMessage({ role: 'user', content: `__SWARM_LABEL__  > ${agent.role} (${agent.model})` });
                 useOllamaStore.getState().addMessage({ role: 'assistant', content: '' });
 
                 await window.vibe.chat(agent.model, msgs, apiKeys);

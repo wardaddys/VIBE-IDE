@@ -75,7 +75,7 @@ export class BackgroundManager {
     this.reviewer.forceBriefing()
   }
 
-  // For neural widget — returns live status of both agents
+  // For neural widget - returns live status of both agents
   getAgentStatus(): AgentStatusSnapshot {
     return {
       collector: this.collector.getStatus(),

@@ -1,9 +1,10 @@
 import { useCallback } from 'react';
 import type { FileEntry } from '../../shared/types';
+import { pickFolder } from '../store/folderPicker';
 
 export function useFileSystem() {
     const openFolder = useCallback(async (): Promise<string | null> => {
-        return window.vibe.openFolder();
+        return pickFolder();
     }, []);
 
     const readDir = useCallback(async (dirPath: string): Promise<FileEntry[]> => {

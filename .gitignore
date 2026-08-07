@@ -7,3 +7,12 @@ release
 .obsidian
 .vibe
 memory.json
+
+# Python virtualenvs
+**/.venv/
+.venv/
+
+# Local secrets / API keys
+.env
+.env.*
+*.local

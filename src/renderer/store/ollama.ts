@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import type { ChatMessage, ModelCapability } from '../../shared/types';
 import { getFallbackCapabilities, fetchCapabilities } from '../utils/capabilities';
+import { useSettingsStore } from './settings';
 
 interface OllamaState {
     connected: boolean;
     version: string | null;
     models: string[];
-    /** key = model name → capability flags */
+    cloudModelNames: string[];
+    /** key = model name -> capability flags */
     modelCapabilities: Record<string, ModelCapability>;
     selectedModel: string;
     messages: ChatMessage[];
@@ -25,6 +27,7 @@ interface OllamaState {
 
     setConnectionState: (connected: boolean, version: string | null) => void;
     setModels: (models: string[]) => void;
+    setCloudModelNames: (names: string[]) => void;
     /** Update capability flags for a single model (used when a user selects a custom model) */
     setModelCapability: (modelId: string, caps: ModelCapability) => void;
     setSelectedModel: (modelName: string) => void;
@@ -48,6 +51,7 @@ export const useOllamaStore = create<OllamaState>((set) => ({
     connected: false,
     version: null,
     models: [],
+    cloudModelNames: [],
     modelCapabilities: {},
     selectedModel: '',
     messages: [],
@@ -65,15 +69,34 @@ export const useOllamaStore = create<OllamaState>((set) => ({
     thinkLevel: 'medium',
 
     setConnectionState: (connected: boolean, version: string | null) => set({ connected, version }),
+    setCloudModelNames: (cloudModelNames: string[]) => set((state) => {
+        // Fetch REAL capabilities for cloud models too (name-guessing missed the
+        // vision/tools flags on the cloud roster). Query ollama.com with the key.
+        const unknown = cloudModelNames.filter((m) => !state.modelCapabilities[m]);
+        const capsMap: Record<string, ModelCapability> = {};
+        unknown.forEach((m) => { capsMap[m] = getFallbackCapabilities(m); });
+        const ollamaKey = useSettingsStore.getState().apiKeys?.ollama;
+        unknown.forEach(async (m) => {
+            try {
+                const real = await fetchCapabilities(m, { cloud: true, ollamaKey });
+                useOllamaStore.getState().setModelCapability(m, real);
+            } catch { /* keep fallback */ }
+        });
+        return { cloudModelNames, modelCapabilities: { ...state.modelCapabilities, ...capsMap } };
+    }),
     setModels: (models: string[]) => set((state) => {
         // Start with fallback capabilities synchronously
+        // Only resolve capabilities for models we haven't seen. The connection
+        // poller calls setModels every 30s - refetching every model each time
+        // hammered /api/show and overwrote real caps with fallbacks.
         const capsMap: Record<string, ModelCapability> = {};
-        models.forEach(m => {
+        const unknown = models.filter((m) => !state.modelCapabilities[m]);
+        unknown.forEach(m => {
             capsMap[m] = getFallbackCapabilities(m);
         });
 
-        // Async fetch real capabilities and update store
-        models.forEach(async (modelName) => {
+        // Async fetch real capabilities for the new ones only
+        unknown.forEach(async (modelName) => {
             try {
                 const real = await fetchCapabilities(modelName);
                 useOllamaStore.getState().setModelCapability(modelName, real);

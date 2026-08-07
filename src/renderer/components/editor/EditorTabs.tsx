@@ -66,7 +66,7 @@ export function EditorTabs() {
                                 justifyContent: 'center'
                             }}
                         >
-                            ×
+                            
                         </button>
                     </div>
                 );

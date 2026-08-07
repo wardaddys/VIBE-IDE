@@ -1,8 +1,46 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { GlassPanel } from '../common/GlassPanel';
 import { useSettingsStore } from '../../store/settings';
 import { useUIStore } from '../../store/ui';
 import { useOllamaStore } from '../../store/ollama';
+
+/* Where VIBE keeps projects. Lets the user change or MOVE the data home
+   (the pointer is stored update-proof in userData). */
+function DataLocationSection() {
+    const [info, setInfo] = useState<{ path: string; default: string } | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState<string | null>(null);
+    const load = () => window.vibe.dataHome.get().then((d) => setInfo({ path: d.path, default: d.default })).catch(() => {});
+    useEffect(() => { load(); }, []);
+    const change = async (move: boolean) => {
+        setMsg(null);
+        const p = await window.vibe.dataHome.pick().catch(() => null);
+        if (!p) return;
+        setBusy(true);
+        const res = await window.vibe.dataHome.set(p, move);
+        setBusy(false);
+        if (res.ok) { setMsg(move ? 'Moved — existing projects were relocated here.' : 'Updated — new work will be created here.'); load(); }
+        else setMsg(res.error || 'Could not update the location.');
+    };
+    const btn: React.CSSProperties = { cursor: 'pointer', width: 'auto', padding: '8px 14px' };
+    return (
+        <div className="settings-section">
+            <h3 className="settings-section__title">Data Location</h3>
+            <div className="settings-info-box">
+                Where VIBE keeps your projects. It lives outside the app, so updates never wipe it.
+            </div>
+            <div className="settings-field">
+                <label className="settings-field__label">Current location</label>
+                <input type="text" readOnly value={info?.path || '…'} className="settings-field__input" style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button className="settings-field__input" style={btn} disabled={busy} onClick={() => change(false)}>Change location…</button>
+                <button className="settings-field__input" style={btn} disabled={busy} onClick={() => change(true)} title="Pick a new folder and MOVE existing projects into it">{busy ? 'Working…' : 'Move data…'}</button>
+            </div>
+            {msg && <div style={{ fontSize: 12, color: 'var(--cl-text-2, #9aa)', marginTop: 8 }}>{msg}</div>}
+        </div>
+    );
+}
 
 function ObsidianStatusIndicator({ apiKey }: { apiKey: string }) {
     const [status, setStatus] = React.useState<'unknown' | 'connected' | 'disconnected'>('unknown');
@@ -20,8 +58,8 @@ function ObsidianStatusIndicator({ apiKey }: { apiKey: string }) {
         <div className="obsidian-status">
             <div className={`obsidian-status__dot obsidian-status__dot--${status}`} />
             {status === 'connected'
-                ? 'Obsidian connected — vault ready'
-                : 'Obsidian not detected — is the plugin running?'
+                ? 'Obsidian connected - vault ready'
+                : 'Obsidian not detected - is the plugin running?'
             }
         </div>
     );
@@ -33,7 +71,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     const backgroundModels = useSettingsStore(state => state.backgroundModels);
     const setBackgroundModel = useSettingsStore(state => state.setBackgroundModel);
     const projectPath = useUIStore(state => state.projectPath);
-    // Same source as ModelSelector — populated by App.tsx on startup
+    // Same source as ModelSelector - populated by App.tsx on startup
     const ollamaModels = useOllamaStore(state => state.models);
     const [saved, setSaved] = useState(false);
 
@@ -59,8 +97,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <GlassPanel variant="strong" className="settings-panel" style={{ overflowY: 'auto', maxHeight: '80vh' }}>
                 <div className="settings-header">
                     <h2 className="settings-header__title">IDE Settings</h2>
-                    <button onClick={onClose} className="settings-header__close">✕</button>
+                    <button onClick={onClose} className="settings-header__close"></button>
                 </div>
+
+                <DataLocationSection />
 
                 <div className="settings-section">
                     <h3 className="settings-section__title">Cloud API Keys</h3>
@@ -131,7 +171,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     )}
                 </div>
 
-                {/* ─── Obsidian Integration Section ─── */}
+                {/* --- Obsidian Integration Section --- */}
                 <div className="settings-section settings-section--obsidian">
                     <h3 className="settings-section__title">Obsidian Integration</h3>
 
@@ -159,7 +199,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 </div>
 
                 <div className="settings-footer">
-                    {saved && <span className="settings-footer__saved">Keys Saved! ✓</span>}
+                    {saved && <span className="settings-footer__saved">Keys Saved! ok</span>}
                     <button onClick={handleSaveAndClose} className="settings-footer__save-btn">Save & Close</button>
                 </div>
             </GlassPanel>

@@ -54,8 +54,8 @@ export function TitleBar() {
             {!isMac ? (
                 <div style={{ display: 'flex', gap: '8px' }}>
                     <button data-clickable onClick={handleMinimize} style={btnStyle}>_</button>
-                    <button data-clickable onClick={handleMaximize} style={btnStyle}>□</button>
-                    <button data-clickable onClick={handleClose} style={{ ...btnStyle, color: 'var(--error)' }}>✕</button>
+                    <button data-clickable onClick={handleMaximize} style={btnStyle}></button>
+                    <button data-clickable onClick={handleClose} style={{ ...btnStyle, color: 'var(--error)' }}></button>
                 </div>
             ) : <div style={{ width: 70 }}></div>}
         </GlassPanel>

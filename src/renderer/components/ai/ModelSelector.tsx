@@ -52,13 +52,13 @@ export function ModelSelector({ onClose }: Props) {
     }, []);
 
     // -----------------------------------------------------------------
-    // Two buckets – local‑only models and Ollama‑cloud models.
+    // Two buckets - localonly models and Ollamacloud models.
     // -----------------------------------------------------------------
     const localModels = models.filter(m => !OLLAMA_ONLY_MODELS.has(m));
     const cloudModels = models.filter(m => OLLAMA_ONLY_MODELS.has(m));
 
     // -----------------------------------------------------------------
-    // Pull the list on mount and then refresh every 30 s (so newly
+    // Pull the list on mount and then refresh every 30s (so newly
     // pulled models appear without a restart).
     // -----------------------------------------------------------------
     useEffect(() => {
@@ -288,7 +288,7 @@ export function ModelSelector({ onClose }: Props) {
                     </div>
                 )}
 
-                {/* ---------- Ollama‑cloud models (free) ---------- */}
+                {/* ---------- Ollamacloud models (free) ---------- */}
                 {cloudModels.length > 0 && (
                     <>
                         <div style={{ padding: '8px 16px 4px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--accent)', fontWeight: 700, marginTop: 8 }}>

@@ -28,10 +28,10 @@ export function ThinkBlock() {
                         borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0,
                     }} />
                 ) : (
-                    <span style={{ fontSize: 11, opacity: 0.6 }}>{expanded ? '▾' : '▸'}</span>
+                    <span style={{ fontSize: 11, opacity: 0.6 }}>{expanded ? '' : ''}</span>
                 )}
                 <span style={{ fontStyle: 'italic', color: isThinking ? 'var(--accent)' : 'var(--text-muted)' }}>
-                    {isThinking ? 'Thinking…' : `Thought for ${thinkingElapsed}s`}
+                    {isThinking ? 'Thinking...' : `Thought for ${thinkingElapsed}s`}
                 </span>
             </button>
 

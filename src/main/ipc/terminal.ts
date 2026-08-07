@@ -82,4 +82,16 @@ export function registerTerminalHandlers(mainWindow: BrowserWindow) {
     ipcMain.handle('terminal:clearOutput', (_event, id: string) => {
         terminalOutputBuffers.set(id, '');
     });
+
+    // A renderer reload (main-frame, cross-document navigation) or a window
+    // close would otherwise orphan every pty. Kill them on both.
+    const killAll = () => {
+        for (const [, p] of terminals) { try { p.kill(); } catch { /* ignore */ } }
+        terminals.clear();
+        terminalOutputBuffers.clear();
+    };
+    mainWindow.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+        if (isMainFrame && !isInPlace) killAll();
+    });
+    mainWindow.on('closed', killAll);
 }

@@ -1,0 +1,27 @@
+# Normalize all text to LF in the repo and on checkout. This is what kills the
+# "every file shows as modified" churn when the tree moves between Windows and
+# Linux. Node, Electron, Vite and VS Code all handle LF on Windows fine.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF or they break when run natively.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Shell scripts must stay LF or bash chokes on \r.
+*.sh   text eol=lf
+
+# Never touch binaries.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.icns binary
+*.webp binary
+*.pdf  binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.node binary
+*.wasm binary

@@ -67,7 +67,7 @@ export function FileTreeItem({ entry, level }: Props) {
                 }}
             >
                 {entry.isDirectory ? (
-                    <span style={{ fontSize: 10, opacity: 0.6, width: 12 }}>{expanded ? '▾' : '▸'}</span>
+                    <span style={{ fontSize: 10, opacity: 0.6, width: 12 }}>{expanded ? '' : ''}</span>
                 ) : (
                     <div style={{ width: 12, display: 'flex', justifyContent: 'center' }}>
                         <div style={{ width: 6, height: 6, borderRadius: '50%', background: getExtColor(entry.name) }} />

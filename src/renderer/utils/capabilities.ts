@@ -4,9 +4,9 @@ export const OLLAMA_ONLY_MODELS = new Set<string>([
     'gpt-oss-120b',
 ]);
 
-export async function fetchCapabilities(modelId: string): Promise<ModelCapability> {
+export async function fetchCapabilities(modelId: string, opts?: { cloud?: boolean; ollamaKey?: string }): Promise<ModelCapability> {
     try {
-        const result = await window.vibe.getModelCapabilities(modelId);
+        const result = await window.vibe.getModelCapabilities(modelId, opts);
         if (!result) return getFallbackCapabilities(modelId);
         return {
             think: result.think,
@@ -39,9 +39,16 @@ export function getFallbackCapabilities(modelId: string): ModelCapability {
         caps.thinkBudget = 'toggle';
     }
 
+    // Vision-capable families (name-pattern fallback for models Ollama doesn't
+    // report caps for — mostly cloud). 'vl'/'vision' already catch qwen-vl,
+    // internvl, llama-vision, granite-vision, etc.; add the ones whose names
+    // don't contain those tokens.
     if (lower.includes('vl') || lower.includes('vision') ||
         lower.includes('llava') || lower.includes('gemini') ||
-        lower.includes('gpt-4o') || lower.includes('llama4')) {
+        lower.includes('gpt-4o') || lower.includes('gpt-5') || lower.includes('llama4') ||
+        lower.includes('minicpm') || lower.includes('moondream') || lower.includes('pixtral') ||
+        lower.includes('gemma3') || lower.includes('gemma4') || lower.includes('gemma-3') || lower.includes('gemma-4') ||
+        lower.includes('claude-3') || lower.includes('claude-4') || lower.includes('claude-opus') || lower.includes('claude-sonnet')) {
         caps.vision = true;
         caps.image = true;
     }

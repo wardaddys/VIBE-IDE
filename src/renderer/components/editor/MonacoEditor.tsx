@@ -66,6 +66,15 @@ function getLanguageFromPath(path: string): string {
 
 const models = new Map<string, monaco.editor.ITextModel>();
 
+/** Languages that read better word-wrapped (prose, not code). */
+const PROSE_LANGS = new Set(['markdown', 'plaintext']);
+
+/** Push new disk content into an already-open Monaco model (agent edits, external changes). */
+export function setModelContent(path: string, content: string) {
+    const m = models.get(path);
+    if (m && m.getValue() !== content) m.setValue(content);
+}
+
 export function MonacoEditor() {
     const containerRef = useRef<HTMLDivElement>(null);
     const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -140,10 +149,10 @@ export function MonacoEditor() {
             return;
         }
 
+        const language = getLanguageFromPath(activeFileId);
         let model = models.get(activeFileId);
         if (!model) {
             const content = fileContents[activeFileId] || '';
-            const language = getLanguageFromPath(activeFileId);
             model = monaco.editor.createModel(content, language);
             models.set(activeFileId, model);
         }
@@ -151,6 +160,10 @@ export function MonacoEditor() {
         if (editorRef.current.getModel() !== model) {
             editorRef.current.setModel(model);
         }
+        // Prose (markdown, plain text) reads better wrapped - no more scrolling
+        // left/right through a long-line document. Code stays unwrapped so its
+        // structure is visible.
+        editorRef.current.updateOptions({ wordWrap: PROSE_LANGS.has(language) ? 'on' : 'off' });
     }, [activeFileId, fileContents]);
 
     return (
