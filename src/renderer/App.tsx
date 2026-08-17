@@ -47,6 +47,10 @@ export default function App() {
     const setTerminalHeight = useUIStore((s) => s.setTerminalHeight);
     const debateMode = useUIStore((s) => s.debateMode);
     const toggleDebateMode = useUIStore((s) => s.toggleDebateMode);
+    const theme = useSettingsStore((s) => s.theme);
+
+    // Keep <html data-theme> in sync so every CSS variable flips at once.
+    useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
 
     // Resizable terminal splitter
     const resizeRef = useRef<{ startY: number; startHeight: number; onMove: (h: number) => void } | null>(null);

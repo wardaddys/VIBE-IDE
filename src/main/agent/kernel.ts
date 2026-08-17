@@ -154,6 +154,10 @@ export class AgentKernel {
                 if (controller.signal.aborted) { stop = 'stopped'; break; }
 
                 // Keep the context window under control for long autonomous hunts.
+                // First repair any dangling tool_calls (aborted runs, resumed
+                // sessions) — strict providers 400 the whole request when a tool
+                // result has no resolvable origin — then trim in safe blocks.
+                repairToolPairing(messages);
                 trimHistory(messages, preset.numCtx ?? 65536);
 
                 const turn = await this.collectTurn(
@@ -214,6 +218,21 @@ export class AgentKernel {
                     }
                 }
                 messages.push({ role: 'tool', parts: resultParts });
+
+                // Prompt discipline backstop: if the model issued multiple non-task
+                // tool calls in one turn, remind it that only task workers may be
+                // batched. This prevents the "act on results before they arrive"
+                // behavior where the UI shows several commands still pending while
+                // the model already narrates the next step.
+                if (turn.toolCalls.length > 1 && !allWorkers) {
+                    messages.push({
+                        role: 'user',
+                        parts: [{
+                            type: 'text',
+                            text: `Reminder: you issued ${turn.toolCalls.length} tools in one turn. Only \`task\` worker calls may be batched. Issue exactly ONE tool per turn, wait for its full result, then decide the next action. Do not narrate expected outcomes before results arrive.`,
+                        }],
+                    });
+                }
 
                 if (controller.signal.aborted) { stop = 'stopped'; break; }
                 if (iter === maxIters - 1) stop = 'budget';
@@ -464,47 +483,96 @@ function estimateTokens(parts: MessagePart[]): number {
 }
 
 /**
+ * Every assistant tool_use MUST have a matching tool_result immediately after,
+ * or strict providers (Kimi K3, OpenAI) reject the whole request with a 400.
+ * Aborting a run mid-execution or resuming an old session can leave dangling
+ * calls; patch them with explicit interruption markers so the history stays
+ * valid instead of poisoning every subsequent request in the session.
+ */
+export function repairToolPairing(messages: AgentMessage[]): void {
+    for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (m.role !== 'assistant') continue;
+        const uses = m.parts.filter((p): p is Extract<MessagePart, { type: 'tool_use' }> => p.type === 'tool_use');
+        if (uses.length === 0) continue;
+
+        const resultIds = new Set<string>();
+        let j = i + 1;
+        while (j < messages.length && messages[j].role === 'tool') {
+            for (const p of messages[j].parts) if (p.type === 'tool_result') resultIds.add(p.toolUseId);
+            j++;
+        }
+        const missing = uses.filter((u) => !resultIds.has(u.id));
+        if (missing.length === 0) continue;
+
+        const synth: MessagePart[] = missing.map((u) => ({
+            type: 'tool_result',
+            toolUseId: u.id,
+            name: u.name,
+            isError: true,
+            content: '[tool execution was interrupted before a result was recorded]',
+        }));
+        if (j > i + 1) messages[j - 1].parts.push(...synth); // merge into the existing tool message
+        else messages.splice(i + 1, 0, { role: 'tool', parts: synth });
+    }
+}
+
+/**
  * Keep the conversation history inside the model's context budget by dropping the
  * oldest non-system turns while preserving the first user message and the most
- * recent assistant/tool exchange. This is a simple sliding window; long tool
- * outputs are the main driver of token growth.
+ * recent assistant/tool exchange.
+ *
+ * BLOCK-AWARE: an assistant message carrying tool_use parts and the tool
+ * messages answering it are kept or dropped TOGETHER. The old per-message
+ * sliding window could orphan a tool result from its originating tool_calls —
+ * Kimi K3 rejects that with "tool messages need a resolvable tool name…".
  */
-function trimHistory(messages: AgentMessage[], budgetTokens: number): void {
-    // Reserve ~30% for the response + system + safety margin.
+export function trimHistory(messages: AgentMessage[], budgetTokens: number): void {
+    // Reserve ~35% for the response + system + safety margin.
     const inputBudget = Math.floor(budgetTokens * 0.65);
-    const systemIdx = messages.findIndex((m) => m.role === 'system');
-    const system: AgentMessage | undefined = systemIdx >= 0 ? messages[systemIdx] : undefined;
-    let current = system ? estimateTokens(system.parts) : 0;
-    // Always keep the first user turn (the original request) so the agent does not
-    // forget what it is supposed to do.
-    const firstUserIdx = messages.findIndex((m) => m.role === 'user');
-    if (firstUserIdx >= 0) current += estimateTokens(messages[firstUserIdx].parts);
 
-    // Walk from newest to oldest, deciding which turns to retain.
+    // Group into indivisible blocks.
+    const blocks: AgentMessage[][] = [];
+    for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (m.role === 'assistant' && m.parts.some((p) => p.type === 'tool_use')) {
+            const block = [m];
+            while (i + 1 < messages.length && messages[i + 1].role === 'tool') block.push(messages[++i]);
+            blocks.push(block);
+        } else {
+            blocks.push([m]);
+        }
+    }
+
+    const tokens = blocks.map((b) => b.reduce((s, m) => s + estimateTokens(m.parts), 0));
+    const isSystemBlock = (i: number) => blocks[i][0].role === 'system';
+    const isOrphanToolBlock = (i: number) => blocks[i].length === 1 && blocks[i][0].role === 'tool';
+    const firstUserBlock = blocks.findIndex((b) => b[0].role === 'user');
+
     const keep = new Set<number>();
-    if (systemIdx >= 0) keep.add(systemIdx);
-    if (firstUserIdx >= 0) keep.add(firstUserIdx);
+    let current = 0;
+    for (let i = 0; i < blocks.length; i++) {
+        if (isSystemBlock(i) || i === firstUserBlock) { keep.add(i); current += tokens[i]; }
+    }
 
-    for (let i = messages.length - 1; i >= 0; i--) {
+    // Walk from newest to oldest, deciding which blocks to retain.
+    for (let i = blocks.length - 1; i >= 0; i--) {
         if (keep.has(i)) continue;
-        const cost = estimateTokens(messages[i].parts);
-        if (current + cost <= inputBudget) {
-            keep.add(i);
-            current += cost;
-        }
+        if (isOrphanToolBlock(i)) continue; // orphan tool results are never valid to send
+        if (current + tokens[i] <= inputBudget) { keep.add(i); current += tokens[i]; }
     }
 
-    const kept = messages.filter((_, i) => keep.has(i));
-    // If nothing would be kept besides system/firstUser (e.g., budget too small),
-    // keep the last assistant+tool pair so the loop can still proceed.
-    if (kept.length <= (systemIdx >= 0 ? 1 : 0) + (firstUserIdx >= 0 ? 1 : 0) && messages.length > kept.length) {
-        const last = messages[messages.length - 1];
-        if (last && !keep.has(messages.length - 1)) {
-            kept.push(last);
-        }
+    const keptBlocks = blocks.filter((_, i) => keep.has(i));
+    // Degenerate case (budget too small): keep the last block so the loop can
+    // still proceed — but never a bare orphan tool block.
+    const pinnedCount = blocks.filter((_, i) => isSystemBlock(i) || i === firstUserBlock).length;
+    if (keptBlocks.length <= pinnedCount && blocks.length > keptBlocks.length) {
+        const lastIdx = blocks.length - 1;
+        if (!keep.has(lastIdx) && !isOrphanToolBlock(lastIdx)) keptBlocks.push(blocks[lastIdx]);
     }
+
     messages.length = 0;
-    messages.push(...kept);
+    messages.push(...keptBlocks.flat());
 }
 
 /** Lightweight project structure snapshot (depth-limited, ignores heavy dirs). */

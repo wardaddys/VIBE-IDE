@@ -623,7 +623,7 @@ body { background: var(--cl-bg); }
 
 /* ---- Conversation column ---- */
 .cl-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-.cl-stream { flex: 1; overflow-y: auto; }
+.cl-stream { flex: 1; overflow-y: auto; overflow-x: hidden; }
 .cl-col { max-width: 814px; margin: 0 auto; padding: 28px 28px 160px; width: 100%; }
 .cl-col--center { max-width: 792px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; gap: 22px; }
 .cl-greeting { font-size: 30px; font-weight: 500; color: var(--cl-text); text-align: center; letter-spacing: -0.3px; }
@@ -632,8 +632,8 @@ body { background: var(--cl-bg); }
 /* messages */
 .cl-msg { margin: 18px 0; animation: fadeUp 0.2s ease-out; }
 .cl-msg--user { display: flex; justify-content: flex-end; }
-.cl-msg--user .cl-msg__body { background: var(--cl-user-bubble); border-radius: 16px; padding: 11px 16px; max-width: 80%; font-size: 16.5px; line-height: 1.55; color: var(--cl-text); white-space: pre-wrap; }
-.cl-msg--assistant .cl-msg__body { font-size: 17px; line-height: 1.7; color: var(--cl-text); }
+.cl-msg--user .cl-msg__body { background: var(--cl-user-bubble); border-radius: 16px; padding: 11px 16px; max-width: 80%; font-size: 16.5px; line-height: 1.55; color: var(--cl-text); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.cl-msg--assistant .cl-msg__body { font-size: 17px; line-height: 1.7; color: var(--cl-text); overflow-wrap: anywhere; word-break: break-word; }
 .cl-cursor { display: inline-block; width: 8px; height: 17px; background: var(--cl-accent); border-radius: 1px; margin-left: 2px; vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
 
 /* markdown */
@@ -666,7 +666,7 @@ body { background: var(--cl-bg); }
 .cl-tool__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cl-text); font-weight: 550; }
 .cl-tool__badge { font-size: 8px; padding: 2px 5px; border-radius: 4px; background: rgba(201,100,66,0.12); color: var(--cl-accent); font-weight: 700; letter-spacing: 0.3px; }
 .cl-tool__body { border-top: 1px solid var(--cl-border-soft); padding: 10px 13px; background: var(--cl-surface-2); }
-.cl-tool__body pre { margin: 0; font-family: var(--cl-mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; max-height: 320px; overflow: auto; color: var(--cl-text-2); }
+.cl-tool__body pre { margin: 0; font-family: var(--cl-mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 320px; overflow: auto; color: var(--cl-text-2); }
 
 .cl-perm { margin: 12px 0; padding: 14px; border-radius: 14px; border: 1px solid rgba(201,100,66,0.35); background: rgba(201,100,66,0.06); }
 .cl-perm__t { font-size: 13.5px; font-weight: 700; margin-bottom: 3px; }
@@ -873,3 +873,75 @@ body { background: var(--cl-bg); }
 .cl-typing span:nth-child(2) { animation-delay: 0.15s; }
 .cl-typing span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes cl-bounce { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+/* ==========================================================================
+   LIGHT THEME
+   Applied when <html data-theme="light">. Overrides both variable blocks
+   (base + cl-) and the white-overlay hovers that assume a dark background.
+   ========================================================================== */
+:root[data-theme='light'] {
+  --bg-mesh:
+    radial-gradient(ellipse at 20% 0%, rgba(61,139,255,0.06) 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 100%, rgba(216,114,78,0.05) 0%, transparent 55%),
+    linear-gradient(180deg, #f7f7fb 0%, #eef0f6 100%);
+
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-border: 1px solid rgba(0, 0, 0, 0.08);
+  --glass-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 8px 32px rgba(0,0,0,0.10);
+
+  --panel-bg: rgba(255, 255, 255, 0.66);
+  --panel-border: 1px solid rgba(0, 0, 0, 0.07);
+  --panel-shadow: 0 2px 12px rgba(0,0,0,0.08);
+
+  --text: #1a1a2e;
+  --text-secondary: #4a4a60;
+  --text-muted: #6f6f85;
+  --text-faint: #9a9ab0;
+
+  --accent: #2a6cff;
+  --accent-light: rgba(42, 108, 255, 0.08);
+  --accent-medium: rgba(42, 108, 255, 0.16);
+
+  --green: #1f9d6c;
+  --green-light: rgba(31, 157, 108, 0.12);
+  --warn: #c07f1a;
+  --warn-light: rgba(192, 127, 26, 0.12);
+  --error: #c93a55;
+
+  --border: rgba(0, 0, 0, 0.10);
+  --border-light: rgba(0, 0, 0, 0.06);
+
+  /* cl- shell */
+  --cl-bg: #f6f6f9;
+  --cl-surface: #ffffff;
+  --cl-surface-2: #ebebf1;
+  --cl-rail: #eeeef3;
+  --cl-text: #1a1a2e;
+  --cl-text-2: #4a4a60;
+  --cl-muted: #6f6f85;
+  --cl-accent: #c65a3a;
+  --cl-accent-hover: #d8724e;
+  --cl-user-bubble: #e6e6ee;
+  --cl-border: rgba(0, 0, 0, 0.10);
+  --cl-border-soft: rgba(0, 0, 0, 0.06);
+  --cl-code-bg: #eceef4;
+}
+
+/* White-overlay hovers/segs assume a dark background; swap to black overlays. */
+:root[data-theme='light'] .cl-winbtn:hover,
+:root[data-theme='light'] .cl-histitem:hover,
+:root[data-theme='light'] .cl-rail__foot button:hover,
+:root[data-theme='light'] .cl-proj__toggle:hover,
+:root[data-theme='light'] .cl-proj__act:hover,
+:root[data-theme='light'] .cl-histrow__acts button:hover { background: rgba(0,0,0,0.07); }
+
+:root[data-theme='light'] .cl-newchat:hover { background: rgba(0,0,0,0.05); }
+:root[data-theme='light'] .cl-seg { background: rgba(0,0,0,0.06); }
+:root[data-theme='light'] .cl-proj--current { background: rgba(0,0,0,0.04); }
+:root[data-theme='light'] .cl-histitem--active { background: rgba(198,90,58,0.10); }
+
+:root[data-theme='light'] *::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); }
+:root[data-theme='light'] *::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.28); }
+
+:root[data-theme='light'] input:focus,
+:root[data-theme='light'] textarea:focus { box-shadow: 0 0 0 3px rgba(42,108,255,0.12) !important; }

@@ -6,6 +6,7 @@ import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import { useEditorStore } from '../../store/editor';
+import { useSettingsStore } from '../../store/settings';
 import { useFileSystem } from '../../hooks/useFileSystem';
 
 self.MonacoEnvironment = {
@@ -51,6 +52,45 @@ monaco.editor.defineTheme('vibe-light', {
     }
 });
 
+/* Dark editor theme — the app shell is dark by default, and the old setup
+   (vs-base light theme, transparent background, near-black text) rendered
+   code invisible on the dark UI. These colors sit on the app background. */
+monaco.editor.defineTheme('vibe-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+        { token: 'comment', foreground: '6f6f85', fontStyle: 'italic' },
+        { token: 'keyword', foreground: '7aa5ff' },
+        { token: 'string', foreground: '4ecf9f' },
+        { token: 'number', foreground: 'e6a33a' },
+        { token: 'type', foreground: '5c9dff' },
+        { token: 'function', foreground: 'b58cff' },
+        { token: 'variable', foreground: 'e7e7f0' },
+        { token: 'operator', foreground: '9a9aab' },
+    ],
+    colors: {
+        'editor.background': '#00000000',
+        'editor.foreground': '#e7e7f0',
+        'editor.lineHighlightBackground': '#3d8bff14',
+        'editor.selectionBackground': '#3d8bff30',
+        'editorCursor.foreground': '#3d8bff',
+        'editorLineNumber.foreground': '#55556a',
+        'editorLineNumber.activeForeground': '#3d8bff',
+        'editorIndentGuide.background': '#ffffff08',
+        'editorIndentGuide.activeBackground': '#ffffff15',
+        'editorWidget.background': '#1b1b23',
+        'editorWidget.border': '#2a2a35',
+        'editorSuggestWidget.background': '#1b1b23',
+        'editorSuggestWidget.border': '#2a2a35',
+        'editorSuggestWidget.selectedBackground': '#3d8bff22',
+        'scrollbarSlider.background': '#ffffff14',
+        'scrollbarSlider.hoverBackground': '#ffffff22',
+        'minimap.background': '#00000000',
+    }
+});
+
+const themeName = (t: 'dark' | 'light') => (t === 'light' ? 'vibe-light' : 'vibe-dark');
+
 function getLanguageFromPath(path: string): string {
     const ext = path.split('.').pop()?.toLowerCase();
     const map: Record<string, string> = {
@@ -75,21 +115,33 @@ export function setModelContent(path: string, content: string) {
     if (m && m.getValue() !== content) m.setValue(content);
 }
 
+/** Free the Monaco model when a tab closes — otherwise every big file ever
+    opened stays in memory for the whole session. */
+export function disposeModel(path: string) {
+    const m = models.get(path);
+    if (m) { m.dispose(); models.delete(path); }
+}
+
 export function MonacoEditor() {
     const containerRef = useRef<HTMLDivElement>(null);
     const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
     const activeFileId = useEditorStore(state => state.activeFileId);
     const fileContents = useEditorStore(state => state.fileContents);
     const updateContent = useEditorStore(state => state.updateContent);
+    const markSaved = useEditorStore(state => state.markSaved);
+    const theme = useSettingsStore(state => state.theme);
     const { writeFile } = useFileSystem();
 
     const timeoutRef = useRef<any>(null);
+    /** Last value produced by OUR keystrokes, so the sync effect below can tell
+        user typing apart from external (agent / disk) changes. */
+    const lastTypedRef = useRef<{ path: string; value: string } | null>(null);
 
     useEffect(() => {
         if (!containerRef.current) return;
 
         const editor = monaco.editor.create(containerRef.current, {
-            theme: 'vibe-light',
+            theme: themeName(useSettingsStore.getState().theme),
             fontSize: 13,
             fontFamily: "'JetBrains Mono', monospace",
             lineHeight: 24,
@@ -126,10 +178,17 @@ export function MonacoEditor() {
             // Find which file is active
             const activeId = useEditorStore.getState().activeFileId;
             if (activeId && models.get(activeId) === currentModel) {
+                lastTypedRef.current = { path: activeId, value: val };
                 updateContent(activeId, val);
                 if (timeoutRef.current) clearTimeout(timeoutRef.current);
                 timeoutRef.current = setTimeout(() => {
-                    writeFile(activeId, val).catch(console.error);
+                    writeFile(activeId, val)
+                        .then(() => {
+                            // Only clear the dirty flag if nothing newer was typed
+                            // while the write was in flight.
+                            if (useEditorStore.getState().fileContents[activeId] === val) markSaved(activeId);
+                        })
+                        .catch((e) => console.error('Failed to save file:', e));
                 }, 1000);
             }
         });
@@ -139,7 +198,10 @@ export function MonacoEditor() {
             editor.dispose();
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
         };
-    }, [writeFile, updateContent]);
+    }, [writeFile, updateContent, markSaved]);
+
+    // Live theme switching without recreating the editor.
+    useEffect(() => { monaco.editor.setTheme(themeName(theme)); }, [theme]);
 
     useEffect(() => {
         if (!editorRef.current) return;
@@ -150,11 +212,19 @@ export function MonacoEditor() {
         }
 
         const language = getLanguageFromPath(activeFileId);
+        const storeContent = fileContents[activeFileId] || '';
         let model = models.get(activeFileId);
         if (!model) {
-            const content = fileContents[activeFileId] || '';
-            model = monaco.editor.createModel(content, language);
+            model = monaco.editor.createModel(storeContent, language);
             models.set(activeFileId, model);
+        } else if (model.getValue() !== storeContent) {
+            // External change (agent edit, re-opened from disk): push it into the
+            // model — but never overwrite the user's own in-flight typing.
+            const own = lastTypedRef.current;
+            const isOwnEdit = own?.path === activeFileId && own.value === storeContent;
+            if (!isOwnEdit) {
+                model.pushEditOperations([], [{ range: model.getFullModelRange(), text: storeContent }], () => null);
+            }
         }
 
         if (editorRef.current.getModel() !== model) {

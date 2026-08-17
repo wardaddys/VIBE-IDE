@@ -37,6 +37,10 @@ Three process zones. IPC is the only bridge between main and renderer.
 
 - **`src/main/`** — Electron main (Node). Owns the filesystem, terminal (node-pty),
   Ollama, and the agent kernel.
+  - `runtimeLog.ts` — durable runtime log at `<dataHome>/logs/runtime.log`
+    (rotates at 2 MB). All console output, renderer errors, and crashes land
+    here; `app:getRuntimeLogPath` / `app:openRuntimeLog` expose it to the UI
+    (Settings → Appearance). Check this file first when debugging.
   - `agent/` — **the native tool-calling kernel** (`kernel.ts` = the loop),
     `presets.ts` (per-surface system prompt + tool set + posture), `registry.ts`,
     `permissions.ts` (permission broker), `scheduler.ts`, `commandLog.ts`,
@@ -74,6 +78,16 @@ Q&A), Cowork (autonomous file/shell agent), Code (terminal-native coding), Desig
   inside the project root (`fsGuard`). Permission-gated tools prompt the user.
 - After changing IPC contracts or `VibeAPI`, run `npx tsc --noEmit` — the contract test
   (`shared/ipcContracts.test.ts`) guards channel consistency.
+- **Theming:** `theme: 'dark' | 'light'` lives in `store/settings.ts` (persisted) and is
+  applied via `<html data-theme>`; both variable blocks in `styles/globals.css` have
+  light overrides, and Monaco (`vibe-dark`/`vibe-light`) + xterm follow the setting.
+  Add new colors as CSS variables in both themes — never hardcode hex in components.
+- **Main-window sandbox is ON** (`sandbox: true`). The preload must stay a fully
+  bundled file whose only runtime `require()` is `'electron'` — verify with
+  `grep -o "require([^)]*)" dist-electron/preload.js` after building.
+- **Background agents** (`ipc/agent/collector|reviewer.ts`) are idempotent:
+  `start()` for the same project is a no-op, `stop()` fully resets state, and all
+  `.vibe` artifacts carry a `version` field (currently `1`).
 
 ## Developing further
 

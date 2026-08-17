@@ -1,11 +1,17 @@
 import React from 'react';
 import { useEditorStore } from '../../store/editor';
+import { disposeModel } from './MonacoEditor';
 
 export function EditorTabs() {
     const openFiles = useEditorStore(state => state.openFiles);
     const activeFileId = useEditorStore(state => state.activeFileId);
     const setActiveFile = useEditorStore(state => state.setActiveFile);
     const closeFile = useEditorStore(state => state.closeFile);
+
+    const close = (path: string) => {
+        disposeModel(path); // free the Monaco model — big files must not linger
+        closeFile(path);
+    };
 
     return (
         <div style={{
@@ -53,7 +59,7 @@ export function EditorTabs() {
                         }} />
                         <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
                         <button
-                            onClick={(e) => { e.stopPropagation(); closeFile(path); }}
+                            onClick={(e) => { e.stopPropagation(); close(path); }}
                             style={{
                                 background: 'transparent',
                                 border: 'none',

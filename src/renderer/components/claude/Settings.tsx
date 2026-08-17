@@ -7,9 +7,10 @@ import { useOllamaStore } from '../../store/ollama';
 import { ModelPicker } from './ModelPicker';
 import { getFallbackCapabilities } from '../../utils/capabilities';
 
-type Section = 'account' | 'providers' | 'models' | 'connectors' | 'skills';
+type Section = 'account' | 'appearance' | 'providers' | 'models' | 'connectors' | 'skills';
 const NAV: { id: Section; label: string; icon: string }[] = [
     { id: 'account', label: 'Account', icon: '◐' },
+    { id: 'appearance', label: 'Appearance', icon: '☀' },
     { id: 'providers', label: 'API keys', icon: '⚿' },
     { id: 'models', label: 'Models', icon: '◇' },
     { id: 'connectors', label: 'Connectors', icon: '⇄' },
@@ -33,6 +34,7 @@ export function Settings({ onClose, initialSection }: { onClose: () => void; ini
                 </div>
                 <div className="cl-set__body">
                     {section === 'account' && <Account />}
+                    {section === 'appearance' && <Appearance />}
                     {section === 'providers' && <Providers />}
                     {section === 'models' && <Models />}
                     {section === 'connectors' && <Connectors />}
@@ -91,6 +93,38 @@ function DataLocation() {
             <div className="cl-field__hint">Your projects live here. It's outside the app, so updates never wipe it.</div>
             {msg && <div className="cl-field__hint" style={{ color: 'var(--cl-accent)' }}>{msg}</div>}
         </div>
+    );
+}
+
+/* Light/dark theme + where the runtime log lives. The theme flips
+   <html data-theme>, Monaco, and xterm; the log file is where every error,
+   crash, and renderer exception lands — the first thing to check when
+   something goes wrong. */
+function Appearance() {
+    const theme = useSettingsStore((s) => s.theme);
+    const setTheme = useSettingsStore((s) => s.setTheme);
+    const [logPath, setLogPath] = useState<string>('…');
+    useEffect(() => { window.vibe.getRuntimeLogPath?.().then(setLogPath).catch(() => setLogPath('unavailable')); }, []);
+    return (
+        <>
+            <div className="cl-set__h">Appearance</div>
+            <div className="cl-set__sub">How VIBE looks. Applies instantly and is remembered across restarts.</div>
+            <div className="cl-field">
+                <span className="cl-field__label">Theme</span>
+                <div className="cl-seg" style={{ maxWidth: 260 }}>
+                    <button className={`cl-seg__btn ${theme === 'dark' ? 'cl-seg__btn--active' : ''}`} onClick={() => setTheme('dark')}>Dark</button>
+                    <button className={`cl-seg__btn ${theme === 'light' ? 'cl-seg__btn--active' : ''}`} onClick={() => setTheme('light')}>Light</button>
+                </div>
+            </div>
+            <div className="cl-field">
+                <span className="cl-field__label">Runtime log</span>
+                <input className="cl-input" readOnly value={logPath} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button className="cl-btn" onClick={() => window.vibe.openRuntimeLog?.()}>Open logs folder</button>
+                </div>
+                <div className="cl-field__hint">Every error, crash, and agent action is appended here. Open this file when something goes wrong.</div>
+            </div>
+        </>
     );
 }
 

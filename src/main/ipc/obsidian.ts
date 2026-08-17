@@ -1,33 +1,23 @@
 const OBSIDIAN_BASE = 'https://localhost:27124'
-const OBSIDIAN_TIMEOUT_MS = 10_000
 
-interface ObsidianResult {
-  ok: boolean
-  status?: number
-  error?: string
-}
+/* A stalled localhost HTTPS request used to hang the handler indefinitely.
+   Every call now fails fast and SAYS why (visible in the runtime log). */
+const FETCH_TIMEOUT_MS = 8000
+const STRUCTURE_MAX_CHARS = 3000
 
 const withKey = (apiKey?: string): string | null => {
   const key = (apiKey || '').trim()
   return key.length > 0 ? key : null
 }
 
-/**
- * Escape a string for safe inclusion in Obsidian YAML frontmatter.
- * Wraps in double quotes and escapes backslashes, double quotes, and newlines.
- */
-function escapeYaml(value: string): string {
-  const safe = value
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '')
-  return `"${safe}"`
-}
+/** YAML-safe scalar for frontmatter values (JSON string is a valid YAML
+    double-quoted scalar — quotes, colons, and backslashes are escaped). */
+const yaml = (v: string): string => JSON.stringify(String(v))
 
-/** Escape inline markdown so user-controlled strings cannot break note formatting. */
-function escapeMarkdownInline(value: string): string {
-  return value.replace(/[\\`*_{}[\]()#+\-.!|]/g, '\\$&')
+interface ObsidianResult {
+  ok: boolean
+  status?: number
+  error?: string
 }
 
 async function obsidianFetch(
@@ -37,7 +27,7 @@ async function obsidianFetch(
   body?: string
 ): Promise<ObsidianResult> {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), OBSIDIAN_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
     const res = await fetch(`${OBSIDIAN_BASE}${endpoint}`, {
       method,
@@ -48,33 +38,47 @@ async function obsidianFetch(
       body,
       signal: controller.signal,
     })
-    return { ok: res.ok, status: res.status }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { ok: false, error: msg }
+    if (!res.ok) {
+      console.warn(`[Obsidian] ${method} ${endpoint} failed: HTTP ${res.status}`)
+      return { ok: false, status: res.status }
+    }
+    return { ok: true }
+  } catch (e: any) {
+    const reason = e?.name === 'AbortError'
+      ? `timed out after ${FETCH_TIMEOUT_MS}ms`
+      : (e?.message || String(e))
+    console.warn(`[Obsidian] ${method} ${endpoint} failed: ${reason}`)
+    return { ok: false, error: reason }
   } finally {
-    clearTimeout(timeout)
+    clearTimeout(timer)
   }
+}
+
+/** Truncate with a visible marker — a snapshot that silently drops content
+    looks authoritative while being wrong. */
+function truncateVisible(text: string, max: number): string {
+  if (text.length <= max) return text
+  return `${text.slice(0, max)}\n… (truncated — ${text.length} chars total)`
 }
 
 export async function obsidianUpsert(
   apiKey: string,
   vaultPath: string,
   content: string
-): Promise<ObsidianResult> {
+): Promise<boolean> {
   const key = withKey(apiKey)
-  if (!key) return { ok: false, error: 'Missing API key' }
-  return obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'PUT', key, content)
+  if (!key) return false
+  return (await obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'PUT', key, content)).ok
 }
 
 export async function obsidianAppend(
   apiKey: string,
   vaultPath: string,
   content: string
-): Promise<ObsidianResult> {
+): Promise<boolean> {
   const key = withKey(apiKey)
-  if (!key) return { ok: false, error: 'Missing API key' }
-  return obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'POST', key, content)
+  if (!key) return false
+  return (await obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'POST', key, content)).ok
 }
 
 export function registerObsidianHandlers() {
@@ -82,24 +86,24 @@ export function registerObsidianHandlers() {
 
   ipcMain.handle('obsidian:ping', async (_: any, apiKey: string) => {
     const key = withKey(apiKey)
-    if (!key) return { ok: false, error: 'Missing API key' }
-    return obsidianFetch('/', 'GET', key)
+    if (!key) return false
+    return (await obsidianFetch('/', 'GET', key)).ok
   })
 
   ipcMain.handle('obsidian:upsertNote', async (
     _: any, apiKey: string, vaultPath: string, content: string
   ) => {
     const key = withKey(apiKey)
-    if (!key) return { ok: false, error: 'Missing API key' }
-    return obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'PUT', key, content)
+    if (!key) return false
+    return (await obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'PUT', key, content)).ok
   })
 
   ipcMain.handle('obsidian:appendNote', async (
     _: any, apiKey: string, vaultPath: string, content: string
   ) => {
     const key = withKey(apiKey)
-    if (!key) return { ok: false, error: 'Missing API key' }
-    return obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'POST', key, content)
+    if (!key) return false
+    return (await obsidianFetch(`/vault/${encodeURIComponent(vaultPath)}`, 'POST', key, content)).ok
   })
 
   ipcMain.handle('obsidian:updateProjectNote', async (
@@ -110,34 +114,30 @@ export function registerObsidianHandlers() {
     projectPath: string
   ) => {
     const key = withKey(apiKey)
-    if (!key) return { ok: false, error: 'Missing API key' }
+    if (!key) return false
     const date = new Date().toISOString().split('T')[0]
-    const truncated = projectStructure.slice(0, 3000)
-    const truncatedNotice = projectStructure.length > 3000
-      ? '\n\n> Project structure truncated to 3000 characters.'
-      : ''
     const content = `---
-project: ${escapeYaml(projectName)}
-path: ${escapeYaml(projectPath)}
+project: ${yaml(projectName)}
+path: ${yaml(projectPath)}
 updated: ${date}
 tags: [vibe, project]
 ---
 
-# ${escapeMarkdownInline(projectName)}
+# ${projectName}
 
 **Path:** \`${projectPath}\`
 **Last opened:** ${date}
 
 ## Project Structure
 \`\`\`
-${truncated}
-\`\`\`${truncatedNotice}
+${truncateVisible(projectStructure, STRUCTURE_MAX_CHARS)}
+\`\`\`
 
 ## Quick Links
 - [[Agent Log]]
 - [[Decisions]]
 `
-    return obsidianFetch(`/vault/${encodeURIComponent(`VIBE/${projectName}/Project Overview.md`)}`, 'PUT', key, content)
+    return (await obsidianFetch(`/vault/${encodeURIComponent(`VIBE/${projectName}/Project Overview.md`)}`, 'PUT', key, content)).ok
   })
 
   ipcMain.handle('obsidian:logAgentRun', async (
@@ -151,7 +151,7 @@ ${truncated}
     criteriaMet: string
   ) => {
     const key = withKey(apiKey)
-    if (!key) return { ok: false, error: 'Missing API key' }
+    if (!key) return false
     const timestamp = new Date().toISOString()
     const stepList = steps.map((s, i) => `${i + 1}. ${s}`).join('\n')
     const entry = `
@@ -168,7 +168,7 @@ ${result}
 
 ---
 `
-    return obsidianFetch(`/vault/${encodeURIComponent(`VIBE/${projectName}/Agent Log.md`)}`, 'POST', key, entry)
+    return (await obsidianFetch(`/vault/${encodeURIComponent(`VIBE/${projectName}/Agent Log.md`)}`, 'POST', key, entry)).ok
   })
 
   ipcMain.handle('obsidian:logDecision', async (
@@ -179,7 +179,7 @@ ${result}
     filesChanged: string
   ) => {
     const key = withKey(apiKey)
-    if (!key) return { ok: false, error: 'Missing API key' }
+    if (!key) return false
     const date = new Date().toISOString().split('T')[0]
     const entry = `
 ## ${date} - ${summary.slice(0, 80)}
@@ -190,6 +190,6 @@ ${summary}
 
 ---
 `
-    return obsidianFetch(`/vault/${encodeURIComponent(`VIBE/${projectName}/Decisions.md`)}`, 'POST', key, entry)
+    return (await obsidianFetch(`/vault/${encodeURIComponent(`VIBE/${projectName}/Decisions.md`)}`, 'POST', key, entry)).ok
   })
 }

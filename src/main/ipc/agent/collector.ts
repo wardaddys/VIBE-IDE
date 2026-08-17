@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { execSync } from 'node:child_process'
+import { exec } from 'node:child_process'
 import { executeNonStreamingChat } from '../modelRouter'
 import type { ChatMessage } from '../../../shared/types'
 
@@ -8,9 +8,18 @@ const MAX_EVENTS = 200
 const DISTILL_INTERVAL_MS = 10 * 60 * 1000
 const HEALTH_UPDATE_INTERVAL_MS = 20 * 1000
 const BRIEFING_EVENT_THRESHOLD = 3
+/** Bounded recursive watcher depth (see startFileWatcher). */
+const WATCH_MAX_DEPTH = 6
+/** Bump when a .vibe artifact's shape changes; readers must tolerate missing. */
+const VIBE_SCHEMA_VERSION = 1
 
-/** Schema version for .vibe artifacts written by the collector. */
-const COLLECTOR_SCHEMA_VERSION = 1
+/** execSync blocks the whole main process; run git probes async with a bound. */
+function runGit(cmd: string, cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { cwd, windowsHide: true, timeout: 5000, encoding: 'utf8' },
+      (err, stdout) => err ? reject(err) : resolve(stdout))
+  })
+}
 
 interface CollectorEvent {
   ts: number
@@ -22,7 +31,6 @@ interface CollectorEvent {
 }
 
 interface HealthState {
-  v: number
   updatedAt: string
   projectPath: string
   projectName: string
@@ -47,9 +55,8 @@ export class CollectorAgent {
   projectPath: string | null = null
   vibeDir: string | null = null
   events: CollectorEvent[] = []
-  watcher: fs.FSWatcher | null = null
-  healthInterval: NodeJS.Timeout | null = null
-  distillInterval: NodeJS.Timeout | null = null
+  healthInterval: any = null
+  distillInterval: any = null
   isRunning: boolean = false
   isDistilling: boolean = false
   onBriefingNeeded: (() => void) | null = null
@@ -59,6 +66,8 @@ export class CollectorAgent {
   model: string = ''
   lastEventTime: number | null = null
   lastDistillTime: number | null = null
+  /** Serializes events.log appends — async, ordered, never blocking the watcher. */
+  writeChain: Promise<unknown> = Promise.resolve()
 
   // Status snapshot for neural widget
   getStatus(): CollectorStatus {
@@ -81,15 +90,16 @@ export class CollectorAgent {
     if (this.apiKeys?.hf) return 'hf:Qwen/Qwen2.5-Coder-32B-Instruct'
 
     try {
-      const res = await fetch('http://localhost:11434/api/tags')
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 3000)
+      const res = await fetch('http://localhost:11434/api/tags', { signal: controller.signal })
+      clearTimeout(timer)
       if (res.ok) {
         const data = await res.json() as any
         const first = (data.models || [])[0]?.name
         if (first) return `ollama:${first}`
       }
-    } catch (err) {
-      console.log('[Collector] Ollama detection failed:', err)
-    }
+    } catch { /* Ollama not reachable — fall through to the default */ }
 
     return 'ollama:llama3.2'
   }
@@ -99,64 +109,101 @@ export class CollectorAgent {
     return executeNonStreamingChat(model, messages, this.apiKeys)
   }
 
+  /**
+   * Idempotent: starting again for the same project is a no-op; starting for a
+   * different project fully stops the previous session first. Callers should
+   * never have to reason about leftover watchers or timers.
+   */
   start(projectPath: string) {
-    // Idempotent: fully reset before (re)starting.
-    this.stop()
+    if (this.isRunning && this.projectPath === projectPath) return
+    if (this.isRunning || this.projectPath) this.stop()
+
     this.projectPath = projectPath
     this.vibeDir = path.join(projectPath, '.vibe')
-    try {
-      fs.mkdirSync(this.vibeDir, { recursive: true })
-    } catch (err) {
-      console.error('[Collector] Failed to create .vibe dir:', err)
-    }
+    try { fs.mkdirSync(this.vibeDir, { recursive: true }) }
+    catch (e) { console.warn('[Collector] could not create .vibe dir:', e) }
     const eventsLog = path.join(this.vibeDir, 'events.log')
     if (!fs.existsSync(eventsLog)) {
-      try { fs.writeFileSync(eventsLog, '') } catch {}
+      try { fs.writeFileSync(eventsLog, '') }
+      catch (e) { console.warn('[Collector] could not create events.log:', e) }
     }
-    this.events = []
-    this.newEventsSinceBriefing = 0
-    this.isRunning = true
     this.startFileWatcher()
     this.startHealthLoop()
     this.startDistillLoop()
+    this.isRunning = true
     console.log('[Collector] Started for:', projectPath)
   }
 
+  /** Full stop AND state reset — a new session must not inherit events,
+      counters, or timestamps from the previous project. */
   stop() {
-    if (this.watcher) {
-      try { this.watcher.close() } catch (err) { console.log('[Collector] Watcher close error:', err) }
-      this.watcher = null
-    }
-    if (this.healthInterval) {
-      clearInterval(this.healthInterval)
-      this.healthInterval = null
-    }
-    if (this.distillInterval) {
-      clearInterval(this.distillInterval)
-      this.distillInterval = null
-    }
-    this.isRunning = false
-    this.isDistilling = false
-    this.projectPath = null
-    this.vibeDir = null
+    for (const w of this.watchers) { try { w.close() } catch { /* already closed */ } }
+    this.watchers = []
+    if (this.healthInterval) { clearInterval(this.healthInterval); this.healthInterval = null }
+    if (this.distillInterval) { clearInterval(this.distillInterval); this.distillInterval = null }
     this.events = []
     this.newEventsSinceBriefing = 0
     this.lastEventTime = null
+    this.lastDistillTime = null
+    this.isDistilling = false
+    this.onBriefingNeeded = null
+    this.projectPath = null
+    this.vibeDir = null
+    this.writeChain = Promise.resolve()
+    this.isRunning = false
   }
+
+  /**
+   * Bounded recursive watcher.
+   *
+   * fs.watch({ recursive: true }) on Linux uses one inotify watch PER DIRECTORY
+   * and exhausts the system limit on large trees; it also behaves differently
+   * per OS. Strategy mirrors ipc/filesystem.ts: native recursive watchers on
+   * macOS/Windows (where they're efficient), a bounded per-directory walk on
+   * Linux. Any single-directory failure is skipped, not fatal.
+   */
+  watchers: fs.FSWatcher[] = []
 
   startFileWatcher() {
     if (!this.projectPath) return
-    const IGNORE = ['node_modules', '.git', 'dist', 'build', 'out',
-                    '.vibe', '__pycache__', '.next', 'target']
-    try {
-      // Use non-recursive fs.watch and handle directory traversal manually to
-      // avoid the reliability issues of fs.watch({ recursive: true }) on Linux.
-      this.watcher = fs.watch(this.projectPath, () => {
-        this.addEvent({ ts: Date.now(), type: 'file_changed' })
-      })
-    } catch (e) {
-      console.log('[Collector] Watcher error (non-fatal):', e)
+    const root = this.projectPath
+    const IGNORE = new Set(['node_modules','.git','dist','build','out',
+                            '.vibe','__pycache__','.next','target'])
+
+    const onChange = (filename: string | null) => {
+      if (!filename) return
+      const norm = filename.replace(/\\/g, '/')
+      if ([...IGNORE].some(ig => norm.split('/').includes(ig))) return
+      this.addEvent({ ts: Date.now(), type: 'file_changed', path: norm })
     }
+
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      try {
+        this.watchers.push(fs.watch(root, { recursive: true }, (_e, f) => onChange(f)))
+      } catch (e) {
+        console.warn('[Collector] Watcher setup failed (non-fatal):', e)
+      }
+      return
+    }
+
+    const addWatcher = (dir: string) => {
+      try {
+        this.watchers.push(fs.watch(dir, (_e, f) => onChange(f ? path.relative(root, path.join(dir, f)) : f)))
+      } catch (e) {
+        console.warn('[Collector] skipping unwatchable dir:', dir, e)
+      }
+    }
+    const walk = (dir: string, depth: number) => {
+      if (depth <= 0) return
+      addWatcher(dir)
+      let entries: fs.Dirent[] = []
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || IGNORE.has(entry.name)) continue
+        walk(path.join(dir, entry.name), depth - 1)
+      }
+    }
+    walk(root, WATCH_MAX_DEPTH)
   }
 
   addEvent(event: CollectorEvent) {
@@ -164,10 +211,13 @@ export class CollectorAgent {
     if (this.events.length > MAX_EVENTS) this.events.shift()
     this.lastEventTime = Date.now()
     if (this.vibeDir) {
-      const logPath = path.join(this.vibeDir, 'events.log')
-      fs.appendFile(logPath, JSON.stringify(event) + '\n', (err) => {
-        if (err) console.log('[Collector] events.log append error:', err)
-      })
+      // Async + serialized: a burst of file events must not block the main
+      // process with appendFileSync in the hot path.
+      const file = path.join(this.vibeDir, 'events.log')
+      const line = JSON.stringify(event) + '\n'
+      this.writeChain = this.writeChain
+        .then(() => fs.promises.appendFile(file, line))
+        .catch((e) => console.warn('[Collector] events.log append failed:', e))
     }
     this.newEventsSinceBriefing++
     if (this.newEventsSinceBriefing >= BRIEFING_EVENT_THRESHOLD && this.onBriefingNeeded) {
@@ -188,32 +238,30 @@ export class CollectorAgent {
     )
   }
 
-  updateHealth() {
-    if (!this.projectPath || !this.vibeDir) return
+  /** Prevents overlapping health runs if a git probe is slow. */
+  private healthInFlight = false
+
+  async updateHealth() {
+    // Capture locals: a stop() mid-run must not crash on nulled fields; the
+    // in-flight write simply lands in the previous project's .vibe dir.
+    const projectPath = this.projectPath
+    const vibeDir = this.vibeDir
+    if (!projectPath || !vibeDir) return
+    if (this.healthInFlight) return
+    this.healthInFlight = true
     try {
+      const cwd = projectPath
       let branch = 'unknown', uncommittedChanges = 0, lastCommit = 'none'
       try {
-        branch = execSync('git branch --show-current',
-          { cwd: this.projectPath, windowsHide: true, encoding: 'utf8' }
-        ).trim()
-      } catch (err) {
-        console.log('[Collector] git branch failed:', err)
-      }
+        branch = (await runGit('git branch --show-current', cwd)).trim()
+      } catch { /* not a git repo or git unavailable */ }
       try {
-        const status = execSync('git status --short',
-          { cwd: this.projectPath, windowsHide: true, encoding: 'utf8' }
-        ).trim()
+        const status = (await runGit('git status --short', cwd)).trim()
         uncommittedChanges = status ? status.split('\n').filter(l => l.trim()).length : 0
-      } catch (err) {
-        console.log('[Collector] git status failed:', err)
-      }
+      } catch { /* ignore */ }
       try {
-        lastCommit = execSync('git log -1 --format="%s"',
-          { cwd: this.projectPath, windowsHide: true, encoding: 'utf8' }
-        ).trim()
-      } catch (err) {
-        console.log('[Collector] git log failed:', err)
-      }
+        lastCommit = (await runGit('git log -1 --format="%s"', cwd)).trim()
+      } catch { /* ignore */ }
 
       const recentChanged = this.events
         .filter(e => e.type === 'file_changed' && e.path)
@@ -223,7 +271,7 @@ export class CollectorAgent {
       const openTodos: string[] = []
       for (const fp of recentChanged.slice(0, 5)) {
         try {
-          const full = path.join(this.projectPath!, fp)
+          const full = path.join(projectPath, fp)
           const content = fs.readFileSync(full, 'utf8')
           const lines = content.split('\n')
           for (const line of lines) {
@@ -231,9 +279,7 @@ export class CollectorAgent {
               openTodos.push(`${fp}: ${line.trim().slice(0, 80)}`)
             }
           }
-        } catch (err) {
-          console.log('[Collector] TODO scan failed for', fp, err)
-        }
+        } catch {}
       }
 
       const extCounts: Record<string, number> = {}
@@ -243,28 +289,26 @@ export class CollectorAgent {
           extCounts[ext] = (extCounts[ext] || 0) + 1
         }
       }
-      const topExt = Object.entries(extCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || ''
-      const langMap: Record<string, string> = {
-        '.cpp': 'C++', '.h': 'C++', '.hpp': 'C++',
-        '.ts': 'TypeScript', '.tsx': 'TypeScript',
-        '.py': 'Python', '.rs': 'Rust', '.go': 'Go'
+      const topExt = Object.entries(extCounts).sort((a,b) => b[1]-a[1])[0]?.[0] || ''
+      const langMap: Record<string,string> = {
+        '.cpp':'C++','.h':'C++','.hpp':'C++',
+        '.ts':'TypeScript','.tsx':'TypeScript',
+        '.py':'Python','.rs':'Rust','.go':'Go'
       }
       const projectLanguage = langMap[topExt] || 'Unknown'
 
       let framework = 'Unknown'
       try {
-        if (fs.existsSync(path.join(this.projectPath!, 'CMakeLists.txt'))) framework = 'Qt/CMake'
-        else if (fs.existsSync(path.join(this.projectPath!, 'package.json'))) framework = 'Node.js'
-        else if (fs.existsSync(path.join(this.projectPath!, 'Cargo.toml'))) framework = 'Rust'
-      } catch (err) {
-        console.log('[Collector] framework detection failed:', err)
-      }
+        if (fs.existsSync(path.join(projectPath, 'CMakeLists.txt'))) framework = 'Qt/CMake'
+        else if (fs.existsSync(path.join(projectPath, 'package.json'))) framework = 'Node.js'
+        else if (fs.existsSync(path.join(projectPath, 'Cargo.toml'))) framework = 'Rust'
+      } catch { /* unreadable dir — framework stays Unknown */ }
 
-      const health: HealthState = {
-        v: COLLECTOR_SCHEMA_VERSION,
+      const health: HealthState & { version: number } = {
+        version: VIBE_SCHEMA_VERSION,
         updatedAt: new Date().toISOString(),
-        projectPath: this.projectPath!,
-        projectName: path.basename(this.projectPath!),
+        projectPath,
+        projectName: path.basename(projectPath),
         git: { branch, uncommittedChanges, lastCommit },
         recentChanges: recentChanged.slice(-5),
         openTodos,
@@ -273,28 +317,26 @@ export class CollectorAgent {
         eventCount: this.events.length
       }
 
-      fs.writeFile(
-        path.join(this.vibeDir, 'health.json'),
-        JSON.stringify(health, null, 2),
-        (err) => {
-          if (err) console.log('[Collector] health.json write error:', err)
-        }
+      fs.writeFileSync(
+        path.join(vibeDir, 'health.json'),
+        JSON.stringify(health, null, 2)
       )
 
       if (this.obsidianApiKey) {
-        this.syncToObsidian(this.obsidianApiKey, health).catch((err) => {
-          console.log('[Collector] Obsidian sync failed:', err)
-        })
+        this.syncToObsidian(this.obsidianApiKey, health)
+          .catch((e) => console.warn('[Collector] Obsidian sync failed:', e))
       }
     } catch (e) {
-      console.log('[Collector] updateHealth error (non-fatal):', e)
+      console.warn('[Collector] updateHealth error (non-fatal):', e)
+    } finally {
+      this.healthInFlight = false
     }
   }
 
   async syncToObsidian(apiKey: string, health: HealthState) {
     try {
       const { obsidianUpsert } = await import('../obsidian')
-      const projectName = path.basename(this.projectPath || '')
+      const projectName = path.basename(this.projectPath || health.projectPath || '')
       const overview = `# ${projectName} - Project Overview
 Updated: ${new Date().toLocaleString()}
 
@@ -311,12 +353,10 @@ ${health.recentChanges.map(c => '- ' + c).join('\n') || '- No recent changes'}
 ## Open TODOs
 ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
 `
-      const res = await obsidianUpsert(apiKey, `VIBE/${projectName}/Project Overview.md`, overview)
-      if (!res.ok) {
-        console.log('[Collector] Obsidian upsert failed:', res.error)
-      }
-    } catch (err) {
-      console.log('[Collector] syncToObsidian error:', err)
+      const ok = await obsidianUpsert(apiKey, `VIBE/${projectName}/Project Overview.md`, overview)
+      if (!ok) console.warn('[Collector] Obsidian project-overview sync failed (see [Obsidian] line above)')
+    } catch (e) {
+      console.warn('[Collector] Obsidian sync error:', e)
     }
   }
 
@@ -354,10 +394,8 @@ ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
         let existing: string[] = []
         try {
           const raw = JSON.parse(fs.readFileSync(factsPath, 'utf8'))
-          existing = raw.facts || []
-        } catch (err) {
-          console.log('[Collector] facts.json read failed:', err)
-        }
+          existing = Array.isArray(raw?.facts) ? raw.facts : []
+        } catch { /* no usable facts file yet — start fresh */ }
 
         // Replace duplicate/stale facts by fuzzy subject prefix and preserve newest.
         const merged = [...existing]
@@ -369,17 +407,15 @@ ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
         }
         const deduped = Array.from(new Set(merged.map(f => f.trim()).filter(Boolean)))
         const combined = deduped.slice(-30)
-        fs.writeFile(factsPath, JSON.stringify({
-          v: COLLECTOR_SCHEMA_VERSION,
+        fs.writeFileSync(factsPath, JSON.stringify({
+          version: VIBE_SCHEMA_VERSION,
           updatedAt: new Date().toISOString(),
           facts: combined
-        }, null, 2), (err) => {
-          if (err) console.log('[Collector] facts.json write error:', err)
-        })
+        }, null, 2))
         this.lastDistillTime = Date.now()
       }
-    } catch (err) {
-      console.log('[Collector] distillEvents error:', err)
+    } catch (e) {
+      console.warn('[Collector] distillEvents failed (non-fatal):', e)
     }
     this.isDistilling = false
   }
@@ -390,20 +426,14 @@ ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
       let healthData: any = {}
       let factsData: any = {}
       let recentEvents: string[] = []
-      try { healthData = JSON.parse(fs.readFileSync(path.join(this.vibeDir, 'health.json'), 'utf8')) } catch (err) {
-        console.log('[Collector] export health read failed:', err)
-      }
-      try { factsData = JSON.parse(fs.readFileSync(path.join(this.vibeDir, 'facts.json'), 'utf8')) } catch (err) {
-        console.log('[Collector] export facts read failed:', err)
-      }
+      try { healthData = JSON.parse(fs.readFileSync(path.join(this.vibeDir,'health.json'),'utf8')) } catch {}
+      try { factsData = JSON.parse(fs.readFileSync(path.join(this.vibeDir,'facts.json'),'utf8')) } catch {}
       try {
-        const raw = fs.readFileSync(path.join(this.vibeDir, 'events.log'), 'utf8')
+        const raw = fs.readFileSync(path.join(this.vibeDir,'events.log'),'utf8')
         recentEvents = raw.trim().split('\n').filter(Boolean).slice(-20)
           .map(l => { try { const e = JSON.parse(l); return `- [${e.type}] ${e.path || e.detail || ''}`; } catch { return '' } })
           .filter(Boolean)
-      } catch (err) {
-        console.log('[Collector] export events read failed:', err)
-      }
+      } catch {}
       const md = `# VIBE Project Knowledge Export
 Generated: ${new Date().toISOString()}
 Project: ${healthData.projectName || 'Unknown'}
@@ -423,9 +453,6 @@ ${recentEvents.join('\n') || '- No activity yet'}
 `
       fs.writeFileSync(outputPath, md)
       return true
-    } catch (err) {
-      console.log('[Collector] generateNotebookLMExport error:', err)
-      return false
-    }
+    } catch { return false }
   }
 }

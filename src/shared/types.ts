@@ -148,6 +148,10 @@ export interface VibeAPI {
     listOmniModels: (apiKeys?: Record<string, string>) => Promise<Array<{ id: string; label: string }>>;
     listOfoxModels: (apiKeys?: Record<string, string>) => Promise<Array<{ id: string; label: string }>>;
     log: (msg: string) => Promise<void>;
+    /** Absolute path of the durable runtime log file (Documents/VIBE/logs/runtime.log). */
+    getRuntimeLogPath: () => Promise<string>;
+    /** Reveal the runtime log in the OS file manager. */
+    openRuntimeLog: () => Promise<void>;
 
     startBackgroundAgents: (projectPath: string, config?: BackgroundAgentConfig) => Promise<{ success: boolean }>;
     getBriefing: () => Promise<string>;
@@ -168,15 +172,16 @@ export interface VibeAPI {
             isSynthesizing: boolean;
             lastBriefingTime: number;
             briefingCount: number;
+            lastSyncError: string | null;
         };
     }>;
 
-    obsidianPing: (apiKey: string) => Promise<{ ok: boolean; error?: string }>;
-    obsidianUpsertNote: (apiKey: string, vaultPath: string, content: string) => Promise<{ ok: boolean; error?: string }>;
-    obsidianAppendNote: (apiKey: string, vaultPath: string, content: string) => Promise<{ ok: boolean; error?: string }>;
-    obsidianUpdateProject: (apiKey: string, projectName: string, projectStructure: string, projectPath: string) => Promise<{ ok: boolean; error?: string }>;
-    obsidianLogRun: (apiKey: string, projectName: string, mission: string, model: string, steps: string[], result: string, criteriaMet: string) => Promise<{ ok: boolean; error?: string }>;
-    obsidianLogDecision: (apiKey: string, projectName: string, summary: string, filesChanged: string) => Promise<{ ok: boolean; error?: string }>;
+    obsidianPing: (apiKey: string) => Promise<boolean>;
+    obsidianUpsertNote: (apiKey: string, vaultPath: string, content: string) => Promise<boolean>;
+    obsidianAppendNote: (apiKey: string, vaultPath: string, content: string) => Promise<boolean>;
+    obsidianUpdateProject: (apiKey: string, projectName: string, projectStructure: string, projectPath: string) => Promise<boolean>;
+    obsidianLogRun: (apiKey: string, projectName: string, mission: string, model: string, steps: string[], result: string, criteriaMet: string) => Promise<boolean>;
+    obsidianLogDecision: (apiKey: string, projectName: string, summary: string, filesChanged: string) => Promise<boolean>;
 
     kernel: KernelAPI;
 

@@ -31,7 +31,7 @@ function toOllamaMessages(messages: AgentMessage[]): OllamaChatMessage[] {
         if (m.role === 'tool') {
             for (const p of m.parts) {
                 if (p.type === 'tool_result') {
-                    out.push({ role: 'tool', content: p.content, tool_name: (p as any).name });
+                    out.push({ role: 'tool', content: p.content, tool_name: p.name });
                 }
             }
             continue;

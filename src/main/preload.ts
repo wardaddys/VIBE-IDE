@@ -56,6 +56,8 @@ const vibeApi: VibeAPI = {
         ipcRenderer.on('ollama:stream', (_event, chunk) => callback(chunk));
     },
     log: (msg: string) => ipcRenderer.invoke('log:renderer', msg),
+    getRuntimeLogPath: (): Promise<string> => ipcRenderer.invoke('app:getRuntimeLogPath'),
+    openRuntimeLog: () => ipcRenderer.invoke('app:openRuntimeLog'),
     stopGeneration: () => ipcRenderer.invoke('ollama:stop'),
     getModelCapabilities: (modelName: string, opts?: { cloud?: boolean; ollamaKey?: string }) => ipcRenderer.invoke('ollama:getCapabilities', modelName, opts),
     getLoadedModels: () => ipcRenderer.invoke('ollama:getLoadedModels'),

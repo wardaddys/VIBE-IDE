@@ -16,3 +16,12 @@ memory.json
 .env
 .env.*
 *.local
+
+# Excluded files / folders
+figma-export/
+push.sh
+docs/
+codebase.md
+INFO.md
+OOP_TESTING_RUTHLESS_AUDIT.md
+VIBE_IMPLEMENTATION_OVERVIEW.md

@@ -39,6 +39,7 @@ function common(ctx: PresetContext): string {
         parts.push(`MULTI-MODEL DISPATCH (conductor): you can act as a conductor and delegate independent research/analysis sub-tasks to WORKER agents via the task tool. Pass the task tool's "model" arg to run a worker on a specific model; omit it to use your own. Firing SEVERAL task calls in ONE turn runs the workers CONCURRENTLY - use this to parallelize wide exploration, then synthesize their summaries yourself. Workers are read/research-only (no write, no bash) - you do the writing and verification. Available worker models: ${ctx.workerModels.join(', ')}.`);
     }
     if (ctx.vibeInstructions) parts.push(`PROJECT RULES (VIBE.md):\n${ctx.vibeInstructions}`);
+    parts.push(`TOOL CALL DISCIPLINE (apply to every surface):\n- Issue exactly ONE tool call per turn, then WAIT for its result before calling another.\n- The only exception is the \\\`task\\\` tool: multiple \\\`task\\\` calls may be issued in one turn because each runs in an isolated read-only worker.\n- Do not batch bash, file, network, browser, MCP, or search calls in a single response.\n- Do not narrate the expected outcome of a tool before its result arrives.\n- If a tool fails or returns unexpected output, reason about it before issuing the next command.`);
     return parts.join('\n\n');
 }
 

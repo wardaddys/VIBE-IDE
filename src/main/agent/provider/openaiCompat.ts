@@ -73,13 +73,26 @@ function resolveEndpoint(req: ProviderRequest): Endpoint {
     return { url: 'https://api.openai.com/v1/chat/completions', apiKey: apiKeys.openai || '', model };
 }
 
-function toOpenAiMessages(messages: AgentMessage[]): unknown[] {
+export function toOpenAiMessages(messages: AgentMessage[]): unknown[] {
     const out: unknown[] = [];
+    // Kimi K3 (and other strict gateways) reject a tool message whose name can't
+    // be resolved: "carry `tool`/`name`, or match a preceding assistant
+    // tool_call by order". We therefore ALWAYS send the tool name. The part
+    // normally carries it (kernel puts it there); the map is the fallback for
+    // persisted/older messages so the name still resolves.
+    const toolNames = new Map<string, string>();
+    for (const m of messages) {
+        if (m.role !== 'assistant') continue;
+        for (const p of m.parts) if (p.type === 'tool_use') toolNames.set(p.id, p.name);
+    }
     for (const m of messages) {
         if (m.role === 'tool') {
             for (const p of m.parts) {
                 if (p.type === 'tool_result') {
-                    out.push({ role: 'tool', tool_call_id: p.toolUseId, content: p.content });
+                    const msg: Record<string, unknown> = { role: 'tool', tool_call_id: p.toolUseId, content: p.content };
+                    const name = p.name || toolNames.get(p.toolUseId);
+                    if (name) msg.name = name;
+                    out.push(msg);
                 }
             }
             continue;

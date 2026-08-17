@@ -12,6 +12,7 @@ import { backgroundManager } from './ipc/agent/backgroundManager';
 import { registerDataHomeHandlers } from './dataHome';
 import { registerDebateHandlers } from './debate';
 import { killAllShells } from './agent/tools/bash';
+import { registerRuntimeLogHandlers, writeRuntimeLog } from './runtimeLog';
 import type { BackgroundAgentConfig } from '../shared/types';
 import { IPC_CHANNELS } from '../shared/ipcContracts';
 
@@ -72,11 +73,16 @@ function createLogWindow() {
         <body style="background:#1e1e1e; color:#00d4aa; font-family:monospace; font-size:12px; padding:10px; word-wrap:break-word;">
             <div id="logs" style="padding-bottom: 20px;">=== VIBE SESSION LOGS ===<br/><br/></div>
             <script>
-                window.appendLog = (msg) => {
+                // Accepts a single line or an array of lines (batched by main).
+                // DOM is capped so a noisy session can't grow it without bound.
+                window.appendLog = (msgs) => {
                     const logs = document.getElementById('logs');
-                    const div = document.createElement('div');
-                    div.textContent = String(msg || '');
-                    logs.appendChild(div);
+                    for (const msg of [].concat(msgs)) {
+                        const div = document.createElement('div');
+                        div.textContent = String(msg ?? '');
+                        logs.appendChild(div);
+                    }
+                    while (logs.childElementCount > 5000) logs.removeChild(logs.firstChild);
                     window.scrollTo(0, document.body.scrollHeight);
                 };
             </script>
@@ -92,21 +98,40 @@ function createLogWindow() {
 const origLog = console.log;
 const origError = console.error;
 
+// Log lines are batched and flushed a few times per second. The old version ran
+// one executeJavaScript PER LINE, which made noisy logs slow and timing flaky.
+const logQueue: string[] = [];
+let logFlushTimer: NodeJS.Timeout | null = null;
+const flushLogQueue = () => {
+    logFlushTimer = null;
+    if (!logWindow || logWindow.isDestroyed() || logQueue.length === 0) { logQueue.length = 0; return; }
+    const batch = logQueue.splice(0, logQueue.length);
+    logWindow.webContents.executeJavaScript(`window.appendLog && window.appendLog(${JSON.stringify(batch)});`).catch(() => {});
+};
 const publishLogLine = (line: string) => {
-    if (!logWindow || logWindow.isDestroyed()) return;
-    const payload = JSON.stringify(line);
-    logWindow.webContents.executeJavaScript(`window.appendLog && window.appendLog(${payload});`).catch(() => {});
+    logQueue.push(line);
+    if (!logFlushTimer) logFlushTimer = setTimeout(flushLogQueue, 250);
 };
 
 console.log = (...args) => {
     origLog(...args);
-    publishLogLine(`[INFO] ${args.join(' ')}`);
+    const line = `[INFO] ${args.join(' ')}`;
+    publishLogLine(line);
+    writeRuntimeLog('INFO', args.map(stringifyLogArg).join(' '));
 };
 
 console.error = (...args) => {
     origError(...args);
-    publishLogLine(`[ERROR] ${args.join(' ')}`);
+    const line = `[ERROR] ${args.join(' ')}`;
+    publishLogLine(line);
+    writeRuntimeLog('ERROR', args.map(stringifyLogArg).join(' '));
 };
+
+function stringifyLogArg(a: unknown): string {
+    if (a instanceof Error) return a.stack || a.message;
+    if (typeof a === 'object') { try { return JSON.stringify(a); } catch { return String(a); } }
+    return String(a);
+}
 
 ipcMain.handle('log:renderer', (_event, msg) => {
     console.log(`[Renderer] ${msg}`);
@@ -122,17 +147,23 @@ function createWindow() {
         minHeight: 600,
         titleBarStyle: 'hiddenInset',
         frame: process.platform === 'darwin',
-        backgroundColor: '#f0f1f6',
+        backgroundColor: '#121218',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            sandbox: false,
+            // The preload is a fully bundled single file whose only runtime
+            // require() is 'electron' (verified in dist-electron/preload.js), so
+            // the Chromium sandbox stays ON. Keep it that way: if the preload
+            // ever gains a Node-only dependency, the bridge breaks under
+            // sandboxing — fix the preload, don't disable the sandbox.
+            sandbox: true,
         },
     });
 
     registerFileSystemHandlers(mainWindow);
     registerDataHomeHandlers(mainWindow);
+    registerRuntimeLogHandlers();
     registerTerminalHandlers(mainWindow);
     registerOllamaHandlers(mainWindow);
     registerObsidianHandlers();
@@ -208,10 +239,23 @@ function createWindow() {
     // A blank window in dev is almost always a silent load failure: Electron can
     // come up before the Vite dev server accepts connections, and loadURL never
     // retries on its own. Retry with backoff instead of showing white forever.
+    // If it never recovers, show the reason instead of an endless white window.
     let loadRetries = 0;
+    const showFatalLoadError = (detail: string) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        console.error(`Fatal renderer load failure: ${detail}`);
+        mainWindow.loadURL(`data:text/html;charset=utf-8,
+            <html><body style="background:#121218;color:#e7e7f0;font-family:system-ui;padding:40px;">
+                <h2 style="color:#e0506a;">VIBE couldn't load its interface</h2>
+                <p style="color:#9a9aab;">${detail.replace(/</g, '&lt;')}</p>
+                <p style="color:#9a9aab;">If you're developing, make sure the Vite dev server is running, then restart the app.
+                The runtime log (Documents/VIBE/logs/runtime.log) has the full error trail.</p>
+            </body></html>
+        `).catch(() => {});
+    };
     mainWindow.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
         if (!isMainFrame || !mainWindow || mainWindow.isDestroyed()) return;
-        if (loadRetries >= 20) { console.error(`Giving up loading renderer after ${loadRetries} retries (${code} ${desc})`); return; }
+        if (loadRetries >= 20) { showFatalLoadError(`Load failed after ${loadRetries} retries (${code} ${desc}).`); return; }
         loadRetries++;
         console.error(`Renderer load failed (${code} ${desc} ${url}); retry ${loadRetries}`);
         setTimeout(() => {
@@ -220,15 +264,24 @@ function createWindow() {
             else mainWindow.loadFile(path.join(process.env.DIST || '', 'index.html'));
         }, 500);
     });
-    mainWindow.webContents.on('did-finish-load', () => { loadRetries = 0; });
+    mainWindow.webContents.on('did-finish-load', () => { loadRetries = 0; crashReloads.length = 0; });
 
     // If the renderer process dies (GPU/cache corruption, OOM), relaunch it
-    // instead of leaving a dead white window.
+    // instead of leaving a dead white window — but cap restarts: a deterministic
+    // crash must not loop reload forever. After 3 crashes in a minute, stop and
+    // show the error page so the failure is visible and diagnosable.
+    const crashReloads: number[] = [];
     mainWindow.webContents.on('render-process-gone', (_e, details) => {
         console.error(`Renderer process gone: ${details.reason} (exitCode ${details.exitCode})`);
-        if (details.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.reload();
+        if (details.reason === 'clean-exit' || !mainWindow || mainWindow.isDestroyed()) return;
+        const now = Date.now();
+        while (crashReloads.length && now - crashReloads[0] > 60_000) crashReloads.shift();
+        if (crashReloads.length >= 3) {
+            showFatalLoadError(`The interface crashed ${crashReloads.length} times in the last minute (last reason: ${details.reason}). Not reloading again automatically.`);
+            return;
         }
+        crashReloads.push(now);
+        mainWindow.webContents.reload();
     });
 
     if (VITE_DEV_SERVER_URL) {
@@ -249,8 +302,17 @@ app.on('window-all-closed', () => {
     }
 })
 
-// Kill any persistent agent shells so no pty survives the app.
-app.on('before-quit', () => { try { killAllShells(); } catch { /* ignore */ } });
+// Centralized shutdown: every long-lived resource stops through ONE path so
+// exit doesn't race background work. Kill persistent agent shells (no pty
+// survives the app) and stop the collector/reviewer agents (watchers, timers).
+let shuttingDown = false;
+function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try { backgroundManager.stop(); } catch { /* ignore */ }
+    try { killAllShells(); } catch { /* ignore */ }
+}
+app.on('before-quit', shutdown);
 
 app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
