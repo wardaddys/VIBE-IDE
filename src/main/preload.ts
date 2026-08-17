@@ -61,6 +61,8 @@ const vibeApi: VibeAPI = {
     getLoadedModels: () => ipcRenderer.invoke('ollama:getLoadedModels'),
     listOpenRouterModels: (apiKeys?: Record<string, string>) => ipcRenderer.invoke('openrouter:listModels', apiKeys),
     searchHuggingFaceModels: (query: string, apiKeys?: Record<string, string>) => ipcRenderer.invoke('hf:searchModels', query, apiKeys),
+    listOmniModels: (apiKeys?: Record<string, string>) => ipcRenderer.invoke('omni:listModels', apiKeys),
+    listOfoxModels: (apiKeys?: Record<string, string>) => ipcRenderer.invoke('ofox:listModels', apiKeys),
 
     // BACKGROUND AGENTS
     startBackgroundAgents: (projectPath: string, config?: BackgroundAgentConfig) =>
@@ -78,8 +80,8 @@ const vibeApi: VibeAPI = {
     obsidianAppendNote: (apiKey: string, vaultPath: string, content: string) => ipcRenderer.invoke('obsidian:appendNote', apiKey, vaultPath, content),
     obsidianUpdateProject: (apiKey: string, projectName: string, projectStructure: string, projectPath: string) =>
         ipcRenderer.invoke('obsidian:updateProjectNote', apiKey, projectName, projectStructure, projectPath),
-    obsidianLogRun: (apiKey: string, projectName: string, mission: string, model: string, steps: string[], result: string, criteraMet: string) =>
-        ipcRenderer.invoke('obsidian:logAgentRun', apiKey, projectName, mission, model, steps, result, criteraMet),
+    obsidianLogRun: (apiKey: string, projectName: string, mission: string, model: string, steps: string[], result: string, criteriaMet: string) =>
+        ipcRenderer.invoke('obsidian:logAgentRun', apiKey, projectName, mission, model, steps, result, criteriaMet),
     obsidianLogDecision: (apiKey: string, projectName: string, summary: string, filesChanged: string) =>
         ipcRenderer.invoke('obsidian:logDecision', apiKey, projectName, summary, filesChanged),
 

@@ -69,6 +69,7 @@ Operating rules:
 - After changes, verify (run the build/tests/linter with bash) and report the real result.
 - Mutating actions and commands are gated by user permission; expect approval prompts.
 - Stop when the task's stated goal is actually met, and summarize what changed.
+- For package-manager operations (apt, dnf, brew, npm install, pip install, etc.), large downloads, builds, or any command likely to take more than ~30 seconds, use the bash tool with background:true. It detaches the job to a logfile and returns immediately; poll the logfile with cat or tail -n 40 and wait for completion before declaring success.
 
 ${common(ctx)}`.trim(),
     },
@@ -81,6 +82,7 @@ ${common(ctx)}`.trim(),
 You operate on a real repository with full read/write/edit/bash and git access. Favor small, verifiable
 changes. Run tests and typechecks after edits. Use grep/glob to locate code before changing it. Keep the
 working tree clean and explain diffs concisely.
+- For package-manager operations (apt, dnf, brew, npm install, pip install, etc.), large downloads, builds, or any command likely to take more than ~30 seconds, use the bash tool with background:true. It detaches the job to a logfile and returns immediately; poll the logfile with cat or tail -n 40 and wait for completion before declaring success.
 
 ${common(ctx)}`.trim(),
     },

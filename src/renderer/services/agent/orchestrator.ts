@@ -1,4 +1,4 @@
-﻿import { useOllamaStore } from '../../store/ollama';
+import { useOllamaStore } from '../../store/ollama';
 import { useSettingsStore } from '../../store/settings';
 import { useTerminalStore } from '../../store/terminal';
 import { useUIStore } from '../../store/ui';
@@ -80,7 +80,11 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
         if (obsidianKey && projectPath) {
             window.vibe.obsidianUpdateProject(
                 obsidianKey, projectName, projectStructure, projectPath
-            ).catch(() => {});
+            )
+                .then((res) => {
+                    if (!res.ok) window.vibe.log(`[OBSIDIAN] project update failed: ${res.error || 'unknown'}`);
+                })
+                .catch((e) => window.vibe.log(`[OBSIDIAN] project update error: ${e}`));
         }
 
         useOllamaStore.getState().setAgentStatus('Planning...');
@@ -392,7 +396,11 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                     }
 
                     if (obsidianKey && projectPath) {
-                        window.vibe.obsidianLogDecision(obsidianKey, projectName, doneSummary, doneFiles).catch(() => {});
+                        window.vibe.obsidianLogDecision(obsidianKey, projectName, doneSummary, doneFiles)
+                            .then((res) => {
+                                if (!res.ok) window.vibe.log(`[OBSIDIAN] decision log failed: ${res.error || 'unknown'}`);
+                            })
+                            .catch((e) => window.vibe.log(`[OBSIDIAN] decision log error: ${e}`));
                     }
 
                     await persistPlanArtifacts(executionSteps, 'completed', {
@@ -537,7 +545,11 @@ export async function runAgentLoop(userMission: string, deps: RunAgentLoopDeps):
                 stepDescriptions,
                 previousResults.slice(-1)[0] || 'No result',
                 criteriaMet || 'unknown',
-            ).catch(() => {});
+            )
+                .then((res) => {
+                    if (!res.ok) window.vibe.log(`[OBSIDIAN] run log failed: ${res.error || 'unknown'}`);
+                })
+                .catch((e) => window.vibe.log(`[OBSIDIAN] run log error: ${e}`));
         }
 
         window.vibe.log(`[AGENT END] Mission: ${userMission.slice(0, 50)} | Steps completed: ${executionSteps.length}`);

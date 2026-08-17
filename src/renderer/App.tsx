@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useOllamaStore } from './store/ollama';
 import { useUIStore } from './store/ui';
 import { useSettingsStore } from './store/settings';
@@ -43,8 +43,48 @@ export default function App() {
     const workspaceOpen = useUIStore((s) => s.workspaceOpen);
     const setWorkspaceOpen = useUIStore((s) => s.setWorkspaceOpen);
     const toggleWorkspaceOpen = useUIStore((s) => s.toggleWorkspaceOpen);
+    const terminalHeight = useUIStore((s) => s.terminalHeight);
+    const setTerminalHeight = useUIStore((s) => s.setTerminalHeight);
     const debateMode = useUIStore((s) => s.debateMode);
     const toggleDebateMode = useUIStore((s) => s.toggleDebateMode);
+
+    // Resizable terminal splitter
+    const resizeRef = useRef<{ startY: number; startHeight: number; onMove: (h: number) => void } | null>(null);
+    const startTerminalResize = (e: React.MouseEvent, onMove: (height: number) => void) => {
+        e.preventDefault();
+        resizeRef.current = { startY: e.clientY, startHeight: terminalHeight, onMove };
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        const onMouseMove = (ev: MouseEvent) => {
+            const r = resizeRef.current;
+            if (!r) return;
+            const minH = 120;
+            const maxH = 600;
+            const delta = r.startY - ev.clientY;
+            const next = Math.max(minH, Math.min(maxH, r.startHeight + delta));
+            r.onMove(next);
+        };
+        const onMouseUp = () => {
+            resizeRef.current = null;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    };
+
+    const terminalPanel = (height: number, onResize: (h: number) => void) => (
+        <>
+            <div
+                onMouseDown={(e) => startTerminalResize(e, onResize)}
+                style={{ height: 6, cursor: 'ns-resize', background: 'var(--cl-border-soft)', flexShrink: 0 }}
+                title="Drag to resize terminal"
+            />
+            <div style={{ height, overflow: 'hidden', flexShrink: 0 }}><TerminalPane /></div>
+        </>
+    );
 
     const [isMax, setIsMax] = useState(false);
     const [modal, setModal] = useState<Modal>(null);
@@ -158,7 +198,7 @@ export default function App() {
                             <EditorTabs />
                             <RunBar />
                             <div style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 0 }}><EditorPane /></div>
-                            <div style={{ height: 220, borderTop: '1px solid var(--cl-border-soft)', overflow: 'hidden', flexShrink: 0 }}><TerminalPane /></div>
+                            {terminalPanel(terminalHeight, (h) => setTerminalHeight(h))}
                         </div>
                         <div className="cl-split__chat cl-split__chat--dock"><AgentSurface /></div>
                     </div>
@@ -170,7 +210,7 @@ export default function App() {
                                 <div className="cl-ws__head"><span>Workspace</span><button className="cl-winbtn" style={{ width: 22, height: 22 }} onClick={() => setWorkspaceOpen(false)}>✕</button></div>
                                 <EditorTabs />
                                 <div style={{ flex: 1, position: 'relative', overflow: 'hidden', minHeight: 0 }}><EditorPane /></div>
-                                <div style={{ height: 200, borderTop: '1px solid var(--cl-border-soft)', overflow: 'hidden' }}><TerminalPane /></div>
+                                {terminalPanel(terminalHeight, (h) => setTerminalHeight(h))}
                             </div>
                         )}
                     </>

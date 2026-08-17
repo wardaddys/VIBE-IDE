@@ -3,6 +3,8 @@ import type { ProviderAdapter } from '../types';
 import { ollamaAdapter, isOllamaModel } from './ollama';
 import { openAiCompatAdapter } from './openaiCompat';
 import { anthropicAdapter } from './anthropic';
+import { isOmniModel } from './omni';
+import { isOfoxModel } from './ofox';
 
 export function selectProvider(
     model: string,
@@ -12,6 +14,8 @@ export function selectProvider(
     // Explicit third-party prefixes always win.
     if (model.startsWith('openrouter:') || model.startsWith('hf:')) return openAiCompatAdapter;
     if (model.startsWith('anthropic:')) return anthropicAdapter;
+    // OmniRoute & OfoxAI are OpenAI-compatible gateways.
+    if (isOmniModel(model) || isOfoxModel(model)) return openAiCompatAdapter;
     if (model.includes('claude') && apiKeys.claude) return anthropicAdapter;
     // Anything the picker tagged as an Ollama model (local or cloud) -> native,
     // even if the name contains vendor-y substrings (gpt-oss, deepseek-v3, gemini-*).
@@ -26,11 +30,15 @@ export function selectProvider(
     return ollamaAdapter;
 }
 
-export { ollamaAdapter, openAiCompatAdapter, anthropicAdapter, isOllamaModel };
+export { ollamaAdapter, openAiCompatAdapter, anthropicAdapter, isOllamaModel, isOmniModel, isOfoxModel };
+export { listOfoxModels } from './ofox';
 
-/** Strip the 'ollama:' / 'anthropic:' / 'openrouter:' / 'hf:' prefix if present. */
+/** Strip the 'ollama:' prefix; leave provider-routed prefixes
+    ('anthropic:' / 'openrouter:' / 'hf:' / 'omni:' / 'ofox:') intact so the
+    adapter can still recognise and route them. */
 export function stripModel(model: string): string {
     if (model.startsWith('ollama:')) return model.slice('ollama:'.length);
-    if (model.startsWith('openrouter:') || model.startsWith('hf:') || model.startsWith('anthropic:')) return model;
+    if (model.startsWith('openrouter:') || model.startsWith('hf:') || model.startsWith('anthropic:') || model.startsWith('omni:') || model.startsWith('ofox:')) return model;
     return model;
 }
+

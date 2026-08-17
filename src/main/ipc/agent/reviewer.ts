@@ -6,6 +6,9 @@ import type { ChatMessage } from '../../../shared/types'
 const REVIEW_INTERVAL_MS = 60 * 1000
 const BRIEFING_TRIGGER_COOLDOWN_MS = 30 * 1000
 
+/** Schema version for .vibe artifacts written by the reviewer. */
+const REVIEWER_SCHEMA_VERSION = 1
+
 export interface ReviewerStatus {
   isRunning: boolean
   isSynthesizing: boolean
@@ -16,7 +19,7 @@ export interface ReviewerStatus {
 export class ReviewerAgent {
   projectPath: string | null = null
   vibeDir: string | null = null
-  reviewInterval: any = null
+  reviewInterval: NodeJS.Timeout | null = null
   isRunning: boolean = false
   isSynthesizing: boolean = false
   lastBriefingTime: number = 0
@@ -50,7 +53,9 @@ export class ReviewerAgent {
         const first = (data.models || [])[0]?.name
         if (first) return `ollama:${first}`
       }
-    } catch {}
+    } catch (err) {
+      console.log('[Reviewer] Ollama detection failed:', err)
+    }
 
     return 'ollama:llama3.2'
   }
@@ -65,6 +70,8 @@ export class ReviewerAgent {
   }
 
   start(projectPath: string) {
+    // Idempotent: clear any existing interval before starting.
+    this.stop()
     this.projectPath = projectPath
     this.vibeDir = path.join(projectPath, '.vibe')
     this.generateBriefing()
@@ -77,8 +84,15 @@ export class ReviewerAgent {
   }
 
   stop() {
-    if (this.reviewInterval) clearInterval(this.reviewInterval)
+    if (this.reviewInterval) {
+      clearInterval(this.reviewInterval)
+      this.reviewInterval = null
+    }
     this.isRunning = false
+    this.isSynthesizing = false
+    this.projectPath = null
+    this.vibeDir = null
+    // Do not reset briefing metadata so consumers can still read the last one.
   }
 
   triggerBriefing() {
@@ -94,16 +108,23 @@ export class ReviewerAgent {
     try {
       let healthData: any = {}
       let factsData: any = {}
-      try { healthData = JSON.parse(fs.readFileSync(path.join(this.vibeDir,'health.json'),'utf8')) } catch {}
-      try { factsData = JSON.parse(fs.readFileSync(path.join(this.vibeDir,'facts.json'),'utf8')) } catch {}
+      try { healthData = JSON.parse(fs.readFileSync(path.join(this.vibeDir, 'health.json'), 'utf8')) } catch (err) {
+        console.log('[Reviewer] health.json read failed:', err)
+      }
+      try { factsData = JSON.parse(fs.readFileSync(path.join(this.vibeDir, 'facts.json'), 'utf8')) } catch (err) {
+        console.log('[Reviewer] facts.json read failed:', err)
+      }
 
+      // Pull a much larger tail of the agent log so context is not clipped.
       let recentAgentLog = ''
       try {
         const projectName = path.basename(this.projectPath)
-        const logPath = path.join(this.vibeDir,'vault',projectName,'Agent Log.md')
-        const raw = fs.readFileSync(logPath,'utf8')
-        recentAgentLog = raw.slice(-500)
-      } catch {}
+        const logPath = path.join(this.vibeDir, 'vault', projectName, 'Agent Log.md')
+        const raw = fs.readFileSync(logPath, 'utf8')
+        recentAgentLog = raw.slice(-4000)
+      } catch (err) {
+        console.log('[Reviewer] agent log read failed:', err)
+      }
 
       const systemPrompt = `You are VIBE's project intelligence synthesizer.
 Your job is to create a concise, accurate briefing about this project
@@ -136,6 +157,7 @@ about this project right now.`
       if (!responseContent) { this.isSynthesizing = false; return }
 
       const briefing = {
+        v: REVIEWER_SCHEMA_VERSION,
         generatedAt: new Date().toISOString(),
         projectPath: this.projectPath,
         projectName: path.basename(this.projectPath),
@@ -161,12 +183,17 @@ about this project right now.`
         try {
           const { obsidianUpsert } = await import('../obsidian')
           const projectName = path.basename(this.projectPath)
-          await obsidianUpsert(
+          const res = await obsidianUpsert(
             this.obsidianApiKey,
             `VIBE/${projectName}/Context Briefing.md`,
             `# Context Briefing\nUpdated: ${new Date().toLocaleString()}\n\n${responseContent}`
           )
-        } catch {}
+          if (!res.ok) {
+            console.log('[Reviewer] Obsidian briefing sync failed:', res.error)
+          }
+        } catch (err) {
+          console.log('[Reviewer] Obsidian sync error:', err)
+        }
       }
     } catch (e) {
       console.log('[Reviewer] generateBriefing error (non-fatal):', e)
@@ -177,7 +204,7 @@ about this project right now.`
   getBriefing(): string {
     try {
       if (!this.vibeDir) return 'No project briefing available yet.'
-      const raw = fs.readFileSync(path.join(this.vibeDir,'briefing.json'),'utf8')
+      const raw = fs.readFileSync(path.join(this.vibeDir, 'briefing.json'), 'utf8')
       const briefing = JSON.parse(raw)
       const age = Date.now() - new Date(briefing.generatedAt).getTime()
       if (age > 30 * 60 * 1000) return 'No project briefing available yet.'

@@ -237,6 +237,16 @@ export function registerOllamaHandlers(mainWindow: BrowserWindow) {
         }
     });
 
+    ipcMain.handle('omni:listModels', async (_event, apiKeys?: Record<string, string>) => {
+        const { listOmniModels } = await import('../agent/provider/omni');
+        return listOmniModels(apiKeys);
+    });
+
+    ipcMain.handle('ofox:listModels', async (_event, apiKeys?: Record<string, string>) => {
+        const { listOfoxModels } = await import('../agent/provider/ofox');
+        return listOfoxModels(apiKeys);
+    });
+
     ipcMain.handle('ollama:getCapabilities', async (_event, modelName: string, opts?: { cloud?: boolean; ollamaKey?: string }) => {
         try {
             // Ask Ollama's /api/show for the model's authoritative capability list.

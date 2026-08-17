@@ -1,4 +1,6 @@
 import type { ChatMessage } from '../../shared/types';
+import { isOmniModel, omniBaseUrl, omniHeaders, omniModelName } from '../agent/provider/omni';
+import { isOfoxModel, ofoxBaseUrl, ofoxHeaders, ofoxModelName } from '../agent/provider/ofox';
 
 const OLLAMA_API_BASE = 'http://localhost:11434/api';
 
@@ -25,6 +27,12 @@ export interface ChatRouteResult {
 export const normalizeModelId = (model: string): string => {
     if (model.startsWith('openrouter:') || model.startsWith('hf:') || model.startsWith('ollama:')) {
         return model.split(':').slice(1).join(':');
+    }
+    if (model.startsWith('omni:')) {
+        return omniModelName(model);
+    }
+    if (model.startsWith('ofox:')) {
+        return ofoxModelName(model);
     }
     return model;
 };
@@ -59,6 +67,30 @@ export function buildChatRoute(
                 },
             },
             mode: 'ollama',
+            modelName,
+        };
+    }
+
+    // OfoxAI — unified OpenAI-compatible API gateway.
+    if (isOfoxModel(rawModel)) {
+        if (!apiKeys?.ofox) throw new Error('OfoxAI API key missing.');
+        return {
+            endpoint: `${ofoxBaseUrl(apiKeys)}/chat/completions`,
+            headers: ofoxHeaders(apiKeys),
+            body: { model: modelName, messages, stream },
+            mode: 'openai',
+            modelName,
+        };
+    }
+
+    // OmniRoute — local OpenAI-compatible gateway at a configurable base URL.
+    // No token exchange, so this resolves fully here (mode 'openai').
+    if (isOmniModel(rawModel)) {
+        return {
+            endpoint: `${omniBaseUrl(apiKeys)}/chat/completions`,
+            headers: omniHeaders(apiKeys),
+            body: { model: modelName, messages, stream },
+            mode: 'openai',
             modelName,
         };
     }

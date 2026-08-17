@@ -16,6 +16,17 @@ export function TerminalPane() {
     const fitAddonRef = useRef<FitAddon | null>(null);
     const termIdRef = useRef<string | null>(null);
 
+    const safeFit = () => {
+        try {
+            const el = containerRef.current;
+            if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
+            fitAddonRef.current?.fit();
+            if (terminalRef.current && termIdRef.current) {
+                window.vibe.resizeTerminal(termIdRef.current, terminalRef.current.cols, terminalRef.current.rows);
+            }
+        } catch { /* terminal not attached / zero-size — ignore */ }
+    };
+
     useEffect(() => {
         if (!containerRef.current) return;
 
@@ -56,7 +67,7 @@ export function TerminalPane() {
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(webLinksAddon);
         terminal.open(containerRef.current);
-        fitAddon.fit();
+        safeFit();
 
         terminalRef.current = terminal;
         fitAddonRef.current = fitAddon;
@@ -71,15 +82,11 @@ export function TerminalPane() {
                 if (incomingId === id) terminal.write(data);
             });
             terminal.onData((data) => window.vibe.sendTerminalInput(id, data));
-            fitAddon.fit();
-            window.vibe.resizeTerminal(id, terminal.cols, terminal.rows);
+            safeFit();
         });
 
         const resizeObserver = new ResizeObserver(() => {
-            if (fitAddonRef.current && terminalRef.current && termIdRef.current) {
-                fitAddonRef.current.fit();
-                window.vibe.resizeTerminal(termIdRef.current, terminalRef.current.cols, terminalRef.current.rows);
-            }
+            safeFit();
         });
 
         resizeObserver.observe(containerRef.current);

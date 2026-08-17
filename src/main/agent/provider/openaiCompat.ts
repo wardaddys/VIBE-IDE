@@ -8,15 +8,38 @@
    ======================================================================= */
 import type { AgentMessage } from '../../../shared/agent';
 import type { ProviderAdapter, ProviderEvent, ProviderRequest } from '../types';
+import { isOmniModel, omniBaseUrl, omniHeaders, omniModelName } from './omni';
+import { isOfoxModel, ofoxBaseUrl, ofoxHeaders, ofoxModelName } from './ofox';
 
 interface Endpoint {
     url: string;
     apiKey: string;
     model: string;
+    /** Fully-formed headers. When set, they are used verbatim and `apiKey` is
+        ignored for auth (OmniRoute carries an optional bearer key here). */
+    headers?: Record<string, string>;
 }
 
 function resolveEndpoint(req: ProviderRequest): Endpoint {
     const { model, apiKeys } = req;
+    // OfoxAI: a unified OpenAI-compatible API gateway.
+    if (isOfoxModel(model)) {
+        return {
+            url: `${ofoxBaseUrl(apiKeys)}/chat/completions`,
+            apiKey: apiKeys.ofox || '',
+            model: ofoxModelName(model),
+            headers: ofoxHeaders(apiKeys),
+        };
+    }
+    // OmniRoute: a local OpenAI-compatible gateway at a configurable base URL.
+    if (isOmniModel(model)) {
+        return {
+            url: `${omniBaseUrl(apiKeys)}/chat/completions`,
+            apiKey: '',
+            model: omniModelName(model),
+            headers: omniHeaders(apiKeys),
+        };
+    }
     if (model.startsWith('openrouter:')) {
         return {
             url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -97,7 +120,7 @@ function toOpenAiMessages(messages: AgentMessage[]): unknown[] {
 export const openAiCompatAdapter: ProviderAdapter = {
     async *stream(req: ProviderRequest): AsyncGenerator<ProviderEvent> {
         const ep = resolveEndpoint(req);
-        if (!ep.apiKey) { yield { t: 'done', stopReason: 'error', error: `Missing API key for ${ep.url}` }; return; }
+        if (!ep.headers && !ep.apiKey) { yield { t: 'done', stopReason: 'error', error: `Missing API key for ${ep.url}` }; return; }
 
         const body: Record<string, unknown> = {
             model: ep.model,
@@ -113,7 +136,7 @@ export const openAiCompatAdapter: ProviderAdapter = {
 
         const res = await fetch(ep.url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.apiKey}` },
+            headers: ep.headers ?? { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.apiKey}` },
             body: JSON.stringify(body),
             signal: req.signal,
         });

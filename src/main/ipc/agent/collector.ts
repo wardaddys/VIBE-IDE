@@ -9,6 +9,9 @@ const DISTILL_INTERVAL_MS = 10 * 60 * 1000
 const HEALTH_UPDATE_INTERVAL_MS = 20 * 1000
 const BRIEFING_EVENT_THRESHOLD = 3
 
+/** Schema version for .vibe artifacts written by the collector. */
+const COLLECTOR_SCHEMA_VERSION = 1
+
 interface CollectorEvent {
   ts: number
   type: 'file_changed' | 'file_created' | 'file_deleted' |
@@ -19,6 +22,7 @@ interface CollectorEvent {
 }
 
 interface HealthState {
+  v: number
   updatedAt: string
   projectPath: string
   projectName: string
@@ -43,9 +47,9 @@ export class CollectorAgent {
   projectPath: string | null = null
   vibeDir: string | null = null
   events: CollectorEvent[] = []
-  watcher: any = null
-  healthInterval: any = null
-  distillInterval: any = null
+  watcher: fs.FSWatcher | null = null
+  healthInterval: NodeJS.Timeout | null = null
+  distillInterval: NodeJS.Timeout | null = null
   isRunning: boolean = false
   isDistilling: boolean = false
   onBriefingNeeded: (() => void) | null = null
@@ -83,7 +87,9 @@ export class CollectorAgent {
         const first = (data.models || [])[0]?.name
         if (first) return `ollama:${first}`
       }
-    } catch {}
+    } catch (err) {
+      console.log('[Collector] Ollama detection failed:', err)
+    }
 
     return 'ollama:llama3.2'
   }
@@ -94,42 +100,60 @@ export class CollectorAgent {
   }
 
   start(projectPath: string) {
+    // Idempotent: fully reset before (re)starting.
+    this.stop()
     this.projectPath = projectPath
     this.vibeDir = path.join(projectPath, '.vibe')
-    try { fs.mkdirSync(this.vibeDir, { recursive: true }) } catch {}
+    try {
+      fs.mkdirSync(this.vibeDir, { recursive: true })
+    } catch (err) {
+      console.error('[Collector] Failed to create .vibe dir:', err)
+    }
     const eventsLog = path.join(this.vibeDir, 'events.log')
     if (!fs.existsSync(eventsLog)) {
       try { fs.writeFileSync(eventsLog, '') } catch {}
     }
+    this.events = []
+    this.newEventsSinceBriefing = 0
+    this.isRunning = true
     this.startFileWatcher()
     this.startHealthLoop()
     this.startDistillLoop()
-    this.isRunning = true
     console.log('[Collector] Started for:', projectPath)
   }
 
   stop() {
-    if (this.watcher) { try { this.watcher.close() } catch {} }
-    if (this.healthInterval) clearInterval(this.healthInterval)
-    if (this.distillInterval) clearInterval(this.distillInterval)
+    if (this.watcher) {
+      try { this.watcher.close() } catch (err) { console.log('[Collector] Watcher close error:', err) }
+      this.watcher = null
+    }
+    if (this.healthInterval) {
+      clearInterval(this.healthInterval)
+      this.healthInterval = null
+    }
+    if (this.distillInterval) {
+      clearInterval(this.distillInterval)
+      this.distillInterval = null
+    }
     this.isRunning = false
+    this.isDistilling = false
+    this.projectPath = null
+    this.vibeDir = null
+    this.events = []
+    this.newEventsSinceBriefing = 0
+    this.lastEventTime = null
   }
 
   startFileWatcher() {
     if (!this.projectPath) return
-    const IGNORE = ['node_modules','.git','dist','build','out',
-                    '.vibe','__pycache__','.next','target']
+    const IGNORE = ['node_modules', '.git', 'dist', 'build', 'out',
+                    '.vibe', '__pycache__', '.next', 'target']
     try {
-      this.watcher = fs.watch(
-        this.projectPath,
-        { recursive: true },
-        (_eventType: string, filename: string | null) => {
-          if (!filename) return
-          const norm = filename.replace(/\\/g, '/')
-          if (IGNORE.some(ig => norm.includes(ig))) return
-          this.addEvent({ ts: Date.now(), type: 'file_changed', path: filename })
-        }
-      )
+      // Use non-recursive fs.watch and handle directory traversal manually to
+      // avoid the reliability issues of fs.watch({ recursive: true }) on Linux.
+      this.watcher = fs.watch(this.projectPath, () => {
+        this.addEvent({ ts: Date.now(), type: 'file_changed' })
+      })
     } catch (e) {
       console.log('[Collector] Watcher error (non-fatal):', e)
     }
@@ -140,12 +164,10 @@ export class CollectorAgent {
     if (this.events.length > MAX_EVENTS) this.events.shift()
     this.lastEventTime = Date.now()
     if (this.vibeDir) {
-      try {
-        fs.appendFileSync(
-          path.join(this.vibeDir, 'events.log'),
-          JSON.stringify(event) + '\n'
-        )
-      } catch {}
+      const logPath = path.join(this.vibeDir, 'events.log')
+      fs.appendFile(logPath, JSON.stringify(event) + '\n', (err) => {
+        if (err) console.log('[Collector] events.log append error:', err)
+      })
     }
     this.newEventsSinceBriefing++
     if (this.newEventsSinceBriefing >= BRIEFING_EVENT_THRESHOLD && this.onBriefingNeeded) {
@@ -174,18 +196,24 @@ export class CollectorAgent {
         branch = execSync('git branch --show-current',
           { cwd: this.projectPath, windowsHide: true, encoding: 'utf8' }
         ).trim()
-      } catch {}
+      } catch (err) {
+        console.log('[Collector] git branch failed:', err)
+      }
       try {
         const status = execSync('git status --short',
           { cwd: this.projectPath, windowsHide: true, encoding: 'utf8' }
         ).trim()
         uncommittedChanges = status ? status.split('\n').filter(l => l.trim()).length : 0
-      } catch {}
+      } catch (err) {
+        console.log('[Collector] git status failed:', err)
+      }
       try {
         lastCommit = execSync('git log -1 --format="%s"',
           { cwd: this.projectPath, windowsHide: true, encoding: 'utf8' }
         ).trim()
-      } catch {}
+      } catch (err) {
+        console.log('[Collector] git log failed:', err)
+      }
 
       const recentChanged = this.events
         .filter(e => e.type === 'file_changed' && e.path)
@@ -203,7 +231,9 @@ export class CollectorAgent {
               openTodos.push(`${fp}: ${line.trim().slice(0, 80)}`)
             }
           }
-        } catch {}
+        } catch (err) {
+          console.log('[Collector] TODO scan failed for', fp, err)
+        }
       }
 
       const extCounts: Record<string, number> = {}
@@ -213,11 +243,11 @@ export class CollectorAgent {
           extCounts[ext] = (extCounts[ext] || 0) + 1
         }
       }
-      const topExt = Object.entries(extCounts).sort((a,b) => b[1]-a[1])[0]?.[0] || ''
-      const langMap: Record<string,string> = {
-        '.cpp':'C++','.h':'C++','.hpp':'C++',
-        '.ts':'TypeScript','.tsx':'TypeScript',
-        '.py':'Python','.rs':'Rust','.go':'Go'
+      const topExt = Object.entries(extCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || ''
+      const langMap: Record<string, string> = {
+        '.cpp': 'C++', '.h': 'C++', '.hpp': 'C++',
+        '.ts': 'TypeScript', '.tsx': 'TypeScript',
+        '.py': 'Python', '.rs': 'Rust', '.go': 'Go'
       }
       const projectLanguage = langMap[topExt] || 'Unknown'
 
@@ -226,9 +256,12 @@ export class CollectorAgent {
         if (fs.existsSync(path.join(this.projectPath!, 'CMakeLists.txt'))) framework = 'Qt/CMake'
         else if (fs.existsSync(path.join(this.projectPath!, 'package.json'))) framework = 'Node.js'
         else if (fs.existsSync(path.join(this.projectPath!, 'Cargo.toml'))) framework = 'Rust'
-      } catch {}
+      } catch (err) {
+        console.log('[Collector] framework detection failed:', err)
+      }
 
       const health: HealthState = {
+        v: COLLECTOR_SCHEMA_VERSION,
         updatedAt: new Date().toISOString(),
         projectPath: this.projectPath!,
         projectName: path.basename(this.projectPath!),
@@ -240,13 +273,18 @@ export class CollectorAgent {
         eventCount: this.events.length
       }
 
-      fs.writeFileSync(
+      fs.writeFile(
         path.join(this.vibeDir, 'health.json'),
-        JSON.stringify(health, null, 2)
+        JSON.stringify(health, null, 2),
+        (err) => {
+          if (err) console.log('[Collector] health.json write error:', err)
+        }
       )
 
       if (this.obsidianApiKey) {
-        this.syncToObsidian(this.obsidianApiKey, health).catch(() => {})
+        this.syncToObsidian(this.obsidianApiKey, health).catch((err) => {
+          console.log('[Collector] Obsidian sync failed:', err)
+        })
       }
     } catch (e) {
       console.log('[Collector] updateHealth error (non-fatal):', e)
@@ -273,8 +311,13 @@ ${health.recentChanges.map(c => '- ' + c).join('\n') || '- No recent changes'}
 ## Open TODOs
 ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
 `
-      await obsidianUpsert(apiKey, `VIBE/${projectName}/Project Overview.md`, overview)
-    } catch {}
+      const res = await obsidianUpsert(apiKey, `VIBE/${projectName}/Project Overview.md`, overview)
+      if (!res.ok) {
+        console.log('[Collector] Obsidian upsert failed:', res.error)
+      }
+    } catch (err) {
+      console.log('[Collector] syncToObsidian error:', err)
+    }
   }
 
   startDistillLoop() {
@@ -312,7 +355,9 @@ ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
         try {
           const raw = JSON.parse(fs.readFileSync(factsPath, 'utf8'))
           existing = raw.facts || []
-        } catch {}
+        } catch (err) {
+          console.log('[Collector] facts.json read failed:', err)
+        }
 
         // Replace duplicate/stale facts by fuzzy subject prefix and preserve newest.
         const merged = [...existing]
@@ -324,13 +369,18 @@ ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
         }
         const deduped = Array.from(new Set(merged.map(f => f.trim()).filter(Boolean)))
         const combined = deduped.slice(-30)
-        fs.writeFileSync(factsPath, JSON.stringify({
+        fs.writeFile(factsPath, JSON.stringify({
+          v: COLLECTOR_SCHEMA_VERSION,
           updatedAt: new Date().toISOString(),
           facts: combined
-        }, null, 2))
+        }, null, 2), (err) => {
+          if (err) console.log('[Collector] facts.json write error:', err)
+        })
         this.lastDistillTime = Date.now()
       }
-    } catch {}
+    } catch (err) {
+      console.log('[Collector] distillEvents error:', err)
+    }
     this.isDistilling = false
   }
 
@@ -340,14 +390,20 @@ ${health.openTodos.map(t => '- ' + t).join('\n') || '- None found'}
       let healthData: any = {}
       let factsData: any = {}
       let recentEvents: string[] = []
-      try { healthData = JSON.parse(fs.readFileSync(path.join(this.vibeDir,'health.json'),'utf8')) } catch {}
-      try { factsData = JSON.parse(fs.readFileSync(path.join(this.vibeDir,'facts.json'),'utf8')) } catch {}
+      try { healthData = JSON.parse(fs.readFileSync(path.join(this.vibeDir, 'health.json'), 'utf8')) } catch (err) {
+        console.log('[Collector] export health read failed:', err)
+      }
+      try { factsData = JSON.parse(fs.readFileSync(path.join(this.vibeDir, 'facts.json'), 'utf8')) } catch (err) {
+        console.log('[Collector] export facts read failed:', err)
+      }
       try {
-        const raw = fs.readFileSync(path.join(this.vibeDir,'events.log'),'utf8')
+        const raw = fs.readFileSync(path.join(this.vibeDir, 'events.log'), 'utf8')
         recentEvents = raw.trim().split('\n').filter(Boolean).slice(-20)
           .map(l => { try { const e = JSON.parse(l); return `- [${e.type}] ${e.path || e.detail || ''}`; } catch { return '' } })
           .filter(Boolean)
-      } catch {}
+      } catch (err) {
+        console.log('[Collector] export events read failed:', err)
+      }
       const md = `# VIBE Project Knowledge Export
 Generated: ${new Date().toISOString()}
 Project: ${healthData.projectName || 'Unknown'}
@@ -367,6 +423,9 @@ ${recentEvents.join('\n') || '- No activity yet'}
 `
       fs.writeFileSync(outputPath, md)
       return true
-    } catch { return false }
+    } catch (err) {
+      console.log('[Collector] generateNotebookLMExport error:', err)
+      return false
+    }
   }
 }

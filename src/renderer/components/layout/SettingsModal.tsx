@@ -47,8 +47,8 @@ function ObsidianStatusIndicator({ apiKey }: { apiKey: string }) {
 
     React.useEffect(() => {
         if (!apiKey) { setStatus('unknown'); return; }
-        window.vibe.obsidianPing(apiKey).then(ok => {
-            setStatus(ok ? 'connected' : 'disconnected');
+        window.vibe.obsidianPing(apiKey).then((res) => {
+            setStatus(res.ok ? 'connected' : 'disconnected');
         }).catch(() => setStatus('disconnected'));
     }, [apiKey]);
 
@@ -104,10 +104,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
                 <div className="settings-section">
                     <h3 className="settings-section__title">Cloud API Keys</h3>
-                    {['gemini', 'claude', 'openai', 'deepseek', 'groq', 'openrouter', 'hf'].map(provider => (
+                    {['gemini', 'claude', 'openai', 'deepseek', 'groq', 'openrouter', 'hf', 'ofox'].map(provider => (
                         <div key={provider} className="settings-field">
                             <label className="settings-field__label">
-                                {(provider === 'hf' ? 'HuggingFace' : provider === 'openrouter' ? 'OpenRouter' : provider)} API Key
+                                {(provider === 'hf' ? 'HuggingFace' : provider === 'openrouter' ? 'OpenRouter' : provider === 'ofox' ? 'OfoxAI' : provider)} API Key
                             </label>
                             <input
                                 type="password"
@@ -118,7 +118,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                                         ? 'Enter HuggingFace token (hf_...)'
                                         : provider === 'openrouter'
                                             ? 'Enter OpenRouter key (sk-or-...)'
-                                            : `Enter ${provider} key (autosaves)...`
+                                            : provider === 'ofox'
+                                                ? 'Enter OfoxAI API key (sk-...)'
+                                                : `Enter ${provider} key (autosaves)...`
                                 }
                                 className="settings-field__input"
                             />
